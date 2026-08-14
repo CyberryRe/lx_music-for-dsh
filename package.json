@@ -2,7 +2,6 @@
   "name": "lx-music-for-dsh",
   "version": "0.1.8",
   "description": "LX Music 增强控制插件：内置音源引擎（SDK 搜索 + 音源脚本沙箱）、侧边栏迷你播放卡、LLM 点歌工具（search_and_play）、设置窗口音源管理。",
-  "private": true,
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -64,5 +63,18 @@
     "rollup": "^4.62.4",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"
-  }
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CyberryRe/lx_music-for-dsh.git"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "lx-music",
+    "music",
+    "plugin",
+    "cordis"
+  ]
 }
