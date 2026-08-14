@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "CommonJS",
+    "moduleResolution": "node10",
+    "outDir": ".test-dist",
+    "allowImportingTsExtensions": false,
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": ["src", "tests"]
+}

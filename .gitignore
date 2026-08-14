@@ -1,0 +1,11 @@
+node_modules/
+.npm-cache/
+.test-dist/
+lib/
+dist/
+*.tgz
+*.log
+sources/
+lyrics/
+docs/video-script.md
+scripts/fetch-lyric.mjs

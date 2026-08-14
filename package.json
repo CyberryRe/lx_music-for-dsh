@@ -1,0 +1,68 @@
+{
+  "name": "lx-music-for-dsh",
+  "version": "0.1.8",
+  "description": "LX Music 增强控制插件：内置音源引擎（SDK 搜索 + 音源脚本沙箱）、侧边栏迷你播放卡、LLM 点歌工具（search_and_play）、设置窗口音源管理。",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "immediately": false
+    }
+  },
+  "files": [
+    "lib",
+    "manifest.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "test": "node scripts/compile-tests.mjs && node --test --test-isolation=none --test-concurrency=1 \".test-dist/tests/*.test.js\"",
+    "test:watch": "node scripts/compile-tests.mjs && node --test --test-isolation=none --test-concurrency=1 --watch \".test-dist/tests/*.test.js\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests scripts --max-warnings 0",
+    "pack": "node scripts/build.mjs && npm pack",
+    "setup": "node scripts/link-dsh.mjs",
+    "prepare": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-typescript": "^12.3.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.1",
+    "@typescript-eslint/eslint-plugin": "^8.67.0",
+    "@typescript-eslint/parser": "^8.67.0",
+    "esbuild": "^0.25.0",
+    "esbuild-wasm": "^0.28.2",
+    "eslint": "^10.8.1",
+    "globals": "^17.11.0",
+    "react": "^18.2.0",
+    "rollup": "^4.62.4",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}
