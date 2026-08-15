@@ -25,8 +25,8 @@ Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
   可选 lxserver 客户端（超时 10s / 重试 2 次 / 音质与平台降级链）。
 - client（浏览器）：React UI（注入 `sidebar.footer.action` slot）+ HTML5 Audio 播放引擎，
   轮询 host 状态（500ms）diff 应用，进度节流上报（1s）。
-- provider 门面（`providerMode`）：`engine`（默认，内置引擎）/ `lxserver`（连接 lxserver 同步服务器）/
-  `auto`（有地址用 lxserver 否则引擎）/ `mock`（内置演示数据，用于无网络演示）。
+- provider 门面（`providerMode`）：`auto`（默认，有地址用 lxserver 否则内置引擎）/ `engine`（强制内置引擎）/
+  `lxserver`（连接 lxserver 同步服务器）/ `mock`（内置演示数据，用于无网络演示）。
 
 ## 快速开始
 
@@ -58,8 +58,6 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 
 ## 文档
 
-- [研读笔记：LX Music 生态](docs/research-lxmusic.md)
-- [研读笔记：DSH 插件系统](docs/research-dsh.md)
 - [开发文档（调试/打包/安装/测试/验收）](docs/development.md)
 
 ## 目录
@@ -69,5 +67,5 @@ manifest.json  插件清单
 src/index.ts   host 入口
 src/client.ts  client 入口
 src/ui/        React 组件
-tests/         单元测试（56 例）
+tests/         单元测试（90 例）
 ```

@@ -1,5 +1,6 @@
-// 内置 mock 数据源：当 lxServerUrl 未配置（或 mockMode: on）时提供搜索与直链解析，
-// 便于演示、开发与单元测试。搜索基于关键词子串匹配，直链为示例音频 URL（可播放的样例音频）。
+// 内置 mock 数据源：仅当 providerMode 为 mock 时提供搜索与直链解析（无 lxServerUrl 时默认
+// 走内置引擎，不会进入 mock），便于无网络演示、开发与单元测试。搜索基于关键词子串匹配，
+// 直链为示例音频 URL（可播放的样例音频）。
 
 import type { MusicInfo, MusicSource, MusicUrlResult, Quality, SearchOutcome } from './shared/types'
 

@@ -40,10 +40,8 @@ lx_plugin/
 │   ├── shared/types.ts      # host/client 共享类型与默认设置
 │   ├── client.ts            # client 入口：sidebar.footer.action 卡片 + 窗口桥
 │   └── ui/                  # React 组件（Card / MainWindow / SettingsWindow / Modal / store）
-├── tests/                   # 单元测试（node:test + mini 断言层，共 81 例）
+├── tests/                   # 单元测试（node:test + mini 断言层，共 90 例）
 └── docs/
-    ├── research-lxmusic.md  # LX Music 研读笔记
-    ├── research-dsh.md      # DSH 插件系统研读笔记
     └── development.md       # 本文档
 ```
 
@@ -66,7 +64,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run build` | 构建 `lib/index.js`（host）与 `lib/client.js`（client bundle） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（56 例） |
+| `npm test` | 编译并运行全部单元测试（90 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 
 > 受限环境提示：本仓库的构建（rollup）、测试（node:test 单进程）与 lint 均为纯进程内实现，
@@ -77,7 +75,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 
 ### 4.1 host 侧（服务端）
 
-- 在 DSH 进程日志中查看：`[lx-music-for-dsh] 插件已加载，provider: mock|lxserver`。
+- 在 DSH 进程日志中查看：`[lx-music-for-dsh] 插件已加载，provider: engine|lxserver|mock`。
 - 插件行配置错误会在启动时以 FAILED fiber 报告（`dsh --profile web --dump-config` 可检查组合配置）。
 
 ### 4.2 client 侧（浏览器）
@@ -89,8 +87,16 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 
 ### 4.3 无 lxserver 环境
 
-插件默认 `mockMode: auto`：未配置 `lxServerUrl` 时自动启用内置 mock 音源
-（17 首示例歌曲 + SoundHelix 示例音频直链），UI 与 LLM 工具全流程可用。
+插件默认 `providerMode: auto`：未配置 `lxServerUrl` 时自动使用**内置引擎**（engine），
+完全独立于 lxserver，不依赖任何外部服务：
+
+- **搜索**：由内置音乐 SDK 提供（酷我/酷狗/QQ音乐/网易云/咪咕五平台实时搜索），无需任何配置，开箱即用（需外网）。
+- **直链解析**：100% 依赖第三方音源脚本（与 lx-music-desktop v2.12.2 一致）。
+  必须在设置窗口「音源管理」页导入 lx-music-desktop 格式的音源脚本
+  （文件/URL/粘贴，导入后自动启用并持久化）；**不导入任何音源脚本时，直链解析会失败**
+  （无脚本可轮询），这不是插件缺陷，而是 lx-music-desktop 生态的固有设计。
+- **无网络演示**：如需完全离线体验，显式设 `providerMode: mock`（内置 17 首示例歌曲 +
+  SoundHelix 示例音频直链），UI 与 LLM 工具全流程可用。
 
 ## 5. 打包
 
@@ -99,7 +105,7 @@ npm run build
 # 产物：
 #   lib/index.js    host 插件（ESM，external：@deepseek-ai/*、zod、schemastery）
 #   lib/client.js   浏览器 bundle（window.__ModuleLoader__.load 包装，external：react 等 kernel 模块）
-npm run pack        # 生成 lx-music-for-dsh-0.1.0.tgz
+npm run pack        # 生成 lx-music-for-dsh-0.1.8.tgz
 ```
 
 ## 6. 安装到 DSH（web 模式）
@@ -108,7 +114,7 @@ npm run pack        # 生成 lx-music-for-dsh-0.1.0.tgz
 
 ```bash
 cd %USERPROFILE%\.dsh\profiles\web
-pnpm add D:\deepseek_harness\lx_plugin\lx-music-for-dsh-0.1.0.tgz
+pnpm add D:\deepseek_harness\lx_plugin\lx-music-for-dsh-0.1.8.tgz
 # 或 dsh plugin --profile web add <tgz 路径>
 ```
 
@@ -145,10 +151,10 @@ pnpm add D:\deepseek_harness\lx_plugin
 
 | 模式 | 说明 |
 |---|---|
-| `engine`（默认） | **完全独立**：搜索用内置音乐 SDK（五平台），直链用「音源管理」导入的音源脚本 |
+| `auto`（默认） | 配置了 `lxServerUrl` 用 lxserver，否则用内置引擎 |
+| `engine` | **完全独立**：搜索用内置音乐 SDK（五平台），直链用「音源管理」导入的音源脚本 |
 | `lxserver` | 连接 lxserver 同步服务器（搜索/直链/音源管理走其 API），需配置 `lxServerUrl` |
-| `auto` | 配置了 `lxServerUrl` 用 lxserver，否则用内置引擎 |
-| `mock` | 内置演示数据（无网络演示） |
+| `mock` | 内置演示数据（17 首示例歌曲，无网络演示） |
 
 音源脚本（.js，lx-music-desktop 格式）在设置窗口「音源管理」页导入（文件/URL/粘贴），
 导入后自动启用；脚本与顺序持久化在 `$DSH_HOME/storages`。内置直链与 lx-music-desktop
@@ -173,7 +179,7 @@ v2.12.2 保持一致：100% 由音源脚本提供。
 
 ```bash
 npm test
-# 覆盖（81 例）：
+# 覆盖（90 例）：
 #   ratelimit     滑动窗口限流（允许/拒绝/滑动/重置/边界）
 #   lxclient      超时重试、平台优先级搜索编排、直链请求体、音源 CRUD 与自动启用
 #   mock          mock 搜索（关键词/歌手/平台/去重/limit）与直链
@@ -200,7 +206,8 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js
-- [ ] `npm test` 56/56 通过
+- [ ] `npm test` 90/90 通过
 - [ ] 安装到 web profile 后侧边栏出现卡片，按钮/进度条实时生效
 - [ ] LLM 可调用 search_and_play（含防刷与日志）
-- [ ] 无 lxserver 时 mock 模式全功能可用；配置 lxserver 后搜索/直链/音源管理走真实服务
+- [ ] 无 lxserver 时内置引擎全功能可用（搜索开箱即用；导入音源脚本后直链解析正常）；
+      配置 lxserver 后搜索/直链/音源管理走真实服务

@@ -8,4 +8,7 @@ dist/
 sources/
 lyrics/
 docs/video-script.md
+docs/research-lxmusic.md
+docs/research-dsh.md
 scripts/fetch-lyric.mjs
+.npmrc

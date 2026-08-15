@@ -22,11 +22,6 @@ Promise.all([L('http://127.0.0.1:1/1'), L('http://127.0.0.1:1/2')])
 lx.send('inited', { sources: { bada: { name: 'bada' } } })
 `
 
-const scriptWithOwnRejection = `
-new Promise((resolve, reject) => setTimeout(() => reject(new Error('boom')), 10))
-lx.send('inited', { sources: { rej: { name: 'rej' } } })
-`
-
 const scriptWithBadTimer = `
 setTimeout(() => { throw new TypeError('Cannot read properties of undefined (reading \\'success\\')') }, 10)
 lx.send('inited', { sources: { tim: { name: 'tim' } } })
