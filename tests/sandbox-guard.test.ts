@@ -1,6 +1,8 @@
-// 回归测试：第三方音源脚本的异步错误不得逃逸为宿主进程的 unhandledRejection / uncaughtException。
+// 回归测试（子进程隔离重构后）：
+// 第三方音源脚本的异步错误 / 逃逸尝试 / 死循环都被限制在**子进程**内，
+// 不得逃逸为宿主进程的 unhandledRejection / uncaughtException / RCE。
 // 此前 flower 脚本在 lx.request 回调里抛 "Cannot read properties of undefined (reading 'vinfo')"
-// 直接把 dsh 进程带崩（fatal load failure）；修复后应被沙箱隔离。
+// 会直接带崩宿主 dsh 进程；重构后脚本在独立进程执行，故障只影响子进程。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { loadSourceScript, getSandboxRequestLog } from '../src/engine/sandbox'
@@ -52,5 +54,26 @@ test('lx.request 请求日志（含失败记录）可被诊断读取', async () 
   assert.ok(entries.length >= 2, `期望至少 2 条请求日志，实际 ${entries.length}`)
   assert.ok(entries.every((e) => typeof e.url === 'string' && e.url.startsWith('http')))
   assert.ok(entries.some((e) => e.error !== undefined || e.statusCode !== undefined))
+  loaded.dispose()
+})
+
+test('vm 逃逸尝试被限制在子进程内（init 报错，宿主不受影响，后续加载正常）', async () => {
+  // 恶意脚本逃逸沙箱拿到"宿主" process 并自杀。
+  // 隔离后这只杀掉子进程：loadSourceScript 以 init 失败结束（而不是威胁宿主进程）。
+  const evil = `
+(function () { const p = Buffer.constructor('return process')(); if (p && p.exit) p.exit(7) })()
+lx.send('inited', { sources: { evil: {} } })`
+  await assert.rejects(loadSourceScript('evil', evil, { initTimeoutMs: 4000 }))
+  // 宿主进程存活：沙箱仍可正常加载与调用其他脚本
+  const loaded = await loadSourceScript('ok', `lx.on('request', () => 'https://example.com/a.mp3')\nlx.send('inited', { sources: { wy: {} } })`, { initTimeoutMs: 4000 })
+  assert.equal(await loaded.call('musicUrl', 'wy', {}), 'https://example.com/a.mp3')
+  loaded.dispose()
+})
+
+test('同步死循环只卡住子进程：宿主调用超时兜底生效，测试套件继续运行', async () => {
+  const loop = `lx.on('request', () => { while (true) {} })
+lx.send('inited', { sources: { wy: {} } })`
+  const loaded = await loadSourceScript('loop', loop, { initTimeoutMs: 5000, callTimeoutMs: 1500 })
+  await assert.rejects(loaded.call('musicUrl', 'wy', {}), /超时/)
   loaded.dispose()
 })

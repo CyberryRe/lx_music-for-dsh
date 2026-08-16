@@ -31,6 +31,10 @@ const CLIENT_EXTERNALS = [
 const isHostExternal = (id) => HOST_EXTERNALS.some((re) => re.test(id))
 const isClientExternal = (id) => CLIENT_EXTERNALS.includes(id)
 
+// host bundle 是 ESM，没有 __dirname；banner 注入之（sandbox.ts 用它定位 runner）。
+// 注意：导入名需加前缀，避免与 bundle 内其余 node:path 导入（dirname 等）重名冲突。
+const HOST_BANNER = `import { dirname as lxmPathDirname } from 'node:path';\nimport { fileURLToPath as lxmFileURLToPath } from 'node:url';\nconst __dirname = lxmPathDirname(lxmFileURLToPath(import.meta.url));`
+
 const tsPlugin = () => [
   nodeResolve({ extensions: ['.ts', '.tsx', '.js', '.mjs', '.json'] }),
   typescript({
@@ -58,7 +62,7 @@ async function buildHost() {
       warn(warning)
     },
   })
-  const { output } = await bundle.generate({ format: 'esm' })
+  const { output } = await bundle.generate({ format: 'esm', banner: HOST_BANNER })
   await bundle.close()
   mkdirSync(join(root, 'lib'), { recursive: true })
   writeFileSync(join(root, 'lib/index.js'), output[0].code)
@@ -93,9 +97,28 @@ var exports = module.exports;
   console.log(`[build] lib/client.js (${output[0].code.length} bytes)`)
 }
 
+/** 音源脚本隔离子进程（runner）：独立 CJS 产物 lib/runner.cjs，仅供 spawn 执行。 */
+async function buildRunner() {
+  const bundle = await rollup({
+    input: join(root, 'src/engine/runner.js'),
+    plugins: [nodeResolve({ extensions: ['.js'] })],
+    external: (id) => /^node:/.test(id),
+    onwarn(warning, warn) {
+      if (warning.code === 'UNRESOLVED_IMPORT') throw new Error(warning.message)
+      warn(warning)
+    },
+  })
+  const { output } = await bundle.generate({ format: 'cjs' })
+  await bundle.close()
+  mkdirSync(join(root, 'lib'), { recursive: true })
+  writeFileSync(join(root, 'lib/runner.cjs'), output[0].code)
+  console.log(`[build] lib/runner.cjs (${output[0].code.length} bytes)`)
+}
+
 if (process.argv.includes('--watch')) {
   console.warn('[build] watch mode unavailable with rollup in this environment; rerun the script to rebuild.')
 }
 
 await buildHost()
+await buildRunner()
 await buildClient()

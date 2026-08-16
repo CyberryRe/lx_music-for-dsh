@@ -22,12 +22,17 @@ Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
 ## 架构
 
 - **完全独立**：搜索由**内置音乐 SDK** 提供（移植自 lx-music-desktop，酷我/酷狗/QQ音乐/网易云/咪咕
-  五平台）；直链解析由**内置音源脚本引擎**提供（node:vm 沙箱执行 lx-music-desktop 音源脚本协议，
+  五平台）；直链解析由**内置音源脚本引擎**提供（子进程隔离执行 lx-music-desktop 音源脚本协议，
   与 lx-music-desktop v2.12.2 一致——直链 100% 依赖音源脚本）；播放为浏览器 HTML5 Audio。
   无需任何外部服务即可使用。
+- **安全模型**：第三方音源脚本（不可信 JS）在**独立子进程**中执行（每个音源一个子进程），
+  宿主 DSH 进程只通过 IPC 与其交换 JSON 消息；子进程环境为白名单（不含任何 DSH 机密）、
+  网络请求带 **SSRF 防护**（默认拦截私网/回环/链路本地地址）、初始化/调用超时自动杀进程兜底。
+  脚本的任何故障——异常、逃逸尝试（如 `Buffer.constructor('return process')`）、死循环——
+  都被限制在子进程内，下一次调用自动重启，宿主进程不受影响。
 - host（Node）：`PlaybackService`（Typert Remote `lxPlayback`，播放权威状态 + 播放模式 + storage 持久化）、
   细粒度音乐工具集（`music_search`/`music_play`/`music_playlist`/`music_prev`/`music_next`/`music_control`
-  及兼容 `search_and_play`）、内置 SDK 搜索、音源脚本沙箱（导入/启用/排序/删除本地管理）、
+  及兼容 `search_and_play`）、内置 SDK 搜索、音源脚本子进程沙箱（导入/启用/排序/删除本地管理）、
   可选 lxserver 客户端（超时 10s / 重试 2 次 / 音质与平台降级链）。
 - client（浏览器）：React UI（注入 `sidebar.footer.action` slot）+ HTML5 Audio 播放引擎，
   轮询 host 状态（500ms）diff 应用，进度节流上报（1s）。

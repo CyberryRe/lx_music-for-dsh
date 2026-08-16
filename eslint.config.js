@@ -39,6 +39,20 @@ export default [
     },
   },
   {
+    // 音源脚本隔离子进程（runner）：自包含 CJS，使用 Node 全局
+    files: ['src/engine/runner.js'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      'no-undef': 'off',
+      'no-unused-vars': 'off',
+      'no-useless-assignment': 'off',
+    },
+  },
+  {
     // 移植自 lx-music-desktop 的 SDK 平台模块（.js 原样保留，Apache-2.0）：不套用项目规则
     files: ['src/sdk/**/*.js'],
     rules: {

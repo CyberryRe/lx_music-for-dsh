@@ -157,6 +157,12 @@ export class PlaybackService extends TypertRemoteService {
     }
   }
 
+  /** 释放 provider 持有的资源（音源子进程等）；插件卸载时由 index.ts 调用。 */
+  disposeProvider(): void {
+    const p = this.provider as { dispose?: () => void } | undefined
+    p?.dispose?.()
+  }
+
   private loadPersisted(): { playlist: MusicInfo[]; currentIndex: number; quality: Quality; volume: number; mute: boolean; playMode?: PlayMode; settings?: PluginSettings } {
     const fallback: PersistedState = { playlist: [], currentIndex: -1, quality: this.settings.defaultQuality, volume: 1, mute: false }
     if (!this.storage) return fallback

@@ -140,5 +140,9 @@ export async function apply(ctx: {
   // LLM 音乐工具集（细粒度：搜索/播放/播放列表/上下首/控制 + 兼容 search_and_play）
   registerMusicTools(ctx, { service })
 
+  // 插件卸载时释放音源子进程（避免孤儿进程）
+  const disposeHook = (ctx as { on?: (event: string, fn: () => void) => void }).on
+  disposeHook?.('dispose', () => service.disposeProvider())
+
   logger.warn('[lx-music-for-dsh] 插件已加载，provider:', service.getProviderMode())
 }

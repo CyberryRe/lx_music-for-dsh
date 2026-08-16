@@ -1,15 +1,25 @@
-// 音源脚本沙箱：用 node:vm 执行 lx-music-desktop 格式的音源脚本（.js）。
-// 协议（与 lxserver userApi.ts / lx-music-desktop 一致）：
-//   - 脚本通过 lx.send('inited', { sources: {...} }) 注册支持的平台（初始化超时 10s）
-//   - lx.on('request', handler) 注册请求处理器；handler({action, source, info}) 返回结果
-//   - action='musicUrl'：info={musicInfo, quality, type}，返回直链字符串
-//   - lx.request(url, options, callback) 提供网络能力（callback 风格）
-// 安全：vm.createContext 隔离 + 超时 + 结果 JSON 化（decontextify），不暴露 Node 内部。
+// 音源脚本沙箱（子进程隔离重构，安全复核修复）：
+// 第三方音源脚本（不可信 JS）在**独立子进程**（lib/runner.cjs；测试编译产物 runner.js）中执行，
+// 宿主进程只通过 IPC 与其交换 JSON 消息。子进程携带：
+//   - SSRF 网络策略（lx.request 默认拦截私网/回环/链路本地地址）
+//   - 白名单环境变量（不含 DSH 机密）
+//   - 初始化/调用超时杀进程兜底（同步死循环只能卡死子进程，宿主不受影响）
+// 脚本的任何故障（异常、逃逸尝试、死循环、定时器泄漏）都被限制在子进程内：
+// 退出即回收全部句柄与定时器；下一次 `call` 惰性重启子进程（重新执行 init）。
+//
+// 协议（与 src/engine/runner.js 对应）：
+//   宿主 → 子进程：init { id, script, initTimeoutMs, allowPrivate, metadata }
+//                 call { callId, action, source, info }
+//                 shutdown
+//   子进程 → 宿主：init-result { ok, sources?, error? }
+//                 call-result { callId, ok, value?, error? }
+//                 httplog { url, statusCode?, error?, ms }
+//                 console { level, text }
 
-import * as vm from 'node:vm'
-import * as crypto from 'node:crypto'
-import * as zlib from 'node:zlib'
-import { httpFetch, type HttpFetchOptions, type HttpFetchResult } from '../sdk/request'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 export interface SourceRegistration {
   name?: string
@@ -27,16 +37,23 @@ export interface LoadedSourceScript {
   homepage?: string
   /** 注册的平台 → 声明。 */
   sources: Record<string, SourceRegistration>
-  /** 调用脚本请求处理器。 */
+  /** 调用脚本请求处理器（在子进程中执行）。 */
   call(action: string, source: string, info: unknown): Promise<unknown>
+  /** 终止子进程并回收资源。 */
   dispose(): void
 }
 
 export interface SandboxOptions {
   /** 脚本初始化超时（等待 lx.send('inited')）。 */
   initTimeoutMs?: number
-  /** 单次请求调用超时。 */
+  /** 单次请求调用超时（超时则终止子进程，下次调用自动重启）。 */
   callTimeoutMs?: number
+  /** 覆盖 runner 可执行文件路径（默认与当前模块同目录的 runner.cjs / runner.js）。 */
+  runnerPath?: string
+  /** 允许音源脚本访问内网/回环地址（默认 false；仅测试/调试场景开启）。 */
+  allowPrivateNetwork?: boolean
+  /** 子进程 console 转发条数上限（默认 200，防日志刷屏）。 */
+  consoleLimit?: number
 }
 
 export class SourceScriptError extends Error {
@@ -46,77 +63,6 @@ export class SourceScriptError extends Error {
     this.name = 'SourceScriptError'
     this.stage = stage
   }
-}
-
-/** 跨上下文对象清理（切断 Proxy 链，JSON 化）。 */
-function decontextify(value: unknown): unknown {
-  if (value === null || value === undefined || typeof value !== 'object') return value
-  if (Array.isArray(value)) return value.map((v) => decontextify(v))
-  try {
-    return JSON.parse(JSON.stringify(value))
-  } catch {
-    return String(value)
-  }
-}
-
-/** Uint8Array/Buffer → Buffer（跨 vm 上下文的 Buffer 需要复制，避免原型链问题）。 */
-function toBuffer(value: Uint8Array | Buffer): Buffer {
-  if (Buffer.isBuffer(value)) return Buffer.from(value)
-  const copy = new Uint8Array(value.byteLength)
-  copy.set(value)
-  return Buffer.from(copy.buffer)
-}
-
-/**
- * 进程级兜底：拦截从音源脚本逃逸的未处理错误（unhandledRejection / uncaughtException），
- * 避免第三方脚本的异步错误（如 lx.request 回调里抛 TypeError、脚本自身 Promise 链
- * 未捕获的 rejection）把宿主 DSH 进程带崩。
- * 判定依据：脚本在 vm.runInContext 中以 filename=`source_<id>.js` 执行，错误堆栈必然包含
- * 该标记；不匹配的错误保持 Node 默认行为（还原后重新抛出），不掩盖宿主自身的问题。
- */
-let processGuardsInstalled = false
-function installProcessGuards(): void {
-  if (processGuardsInstalled) return
-  processGuardsInstalled = true
-
-  const fromSourceScript = (reason: unknown): boolean => {
-    const stack = reason instanceof Error ? (reason.stack ?? '') : String(reason)
-    return /source_[A-Za-z0-9_-]+\.js/.test(stack)
-  }
-
-  const rejectionGuard = (reason: unknown): void => {
-    if (fromSourceScript(reason)) {
-      console.warn('[lx-music sandbox] 已拦截音源脚本未处理的 Promise 拒绝（不影响宿主进程）:', reason)
-      return
-    }
-    // 非音源脚本错误：还原默认行为（Node 默认把无处理的 rejection 抛出为 uncaughtException）
-    process.removeListener('unhandledRejection' as never, rejectionGuard)
-    process.emit('unhandledRejection' as never, reason as never)
-    process.on('unhandledRejection' as never, rejectionGuard)
-  }
-  process.on('unhandledRejection' as never, rejectionGuard)
-
-  const exceptionGuard = (err: Error): void => {
-    if (fromSourceScript(err)) {
-      console.warn('[lx-music sandbox] 已拦截音源脚本未捕获异常（不影响宿主进程）:', err)
-      return
-    }
-    // 非音源脚本错误：还原默认崩溃行为
-    process.removeListener('uncaughtException' as never, exceptionGuard)
-    throw err
-  }
-  process.on('uncaughtException' as never, exceptionGuard)
-}
-
-/** 包一层 try/catch，防止沙箱脚本的异步回调抛错逃逸到宿主事件循环。 */
-function safeTimer<T extends (...args: never[]) => void>(fn: T): T {
-  return ((...args: never[]) => {
-    try {
-      return fn(...args)
-    } catch (err) {
-      console.warn('[lx-music sandbox] 音源脚本定时器回调抛错（已隔离）:', err)
-    }
-  }) as T
 }
 
 /** 从脚本头部 JSDoc 注释提取元数据。 */
@@ -161,216 +107,287 @@ function pushRequestLog(entry: SandboxRequestLogEntry): void {
   if (requestLog.length > REQUEST_LOG_LIMIT) requestLog.shift()
 }
 
-/** 创建 lx.request 实现（沙箱外，Node 网络能力）。
- *  回调约定与 lxserver/lx-music-desktop 一致：callback(err, response, body)，
- *  其中 response = { statusCode, statusMessage, headers, body }（body 字段内嵌，
- *  许多脚本从 response 解构 body）。 */
-function createLxRequest() {
-  return (url: string, options: HttpFetchOptions = {}, callback: (err: Error | null, resp?: Partial<HttpFetchResult> & { body?: unknown }, body?: unknown) => void): (() => void) => {
-    const startedAt = Date.now()
-    const req = httpFetch(url, {
-      method: options.method,
-      headers: options.headers,
-      body: options.body,
-      form: options.form,
-      formData: options.formData,
-      timeout: options.timeout,
-    })
-    req.promise.then(
-      (resp) => {
-        pushRequestLog({ ts: Date.now(), url, statusCode: resp.statusCode, ms: Date.now() - startedAt })
-        if (resp.statusCode !== undefined && resp.statusCode >= 400) {
-          // 非 2xx 直接告警到宿主进程 stdout（诊断「电脑解析不了、手机可以」等场景）
-          console.warn(`[lx-music sandbox] 音源脚本请求 HTTP ${resp.statusCode}: ${url}`)
-        }
-        const safeResp = { statusCode: resp.statusCode, statusMessage: undefined as string | undefined, headers: resp.headers, body: resp.body }
-        try {
-          callback(null, safeResp, resp.body)
-        } catch (err) {
-          // 脚本回调内抛错（如访问未定义字段）不得逃逸为宿主进程的 unhandledRejection
-          console.warn('[lx-music sandbox] 音源脚本 lx.request 回调抛错（已隔离）:', err)
-        }
-      },
-      (err) => {
-        pushRequestLog({ ts: Date.now(), url, error: err instanceof Error ? err.message : String(err), ms: Date.now() - startedAt })
-        try {
-          callback(err instanceof Error ? err : new Error(String(err)), undefined, undefined)
-        } catch (err2) {
-          console.warn('[lx-music sandbox] 音源脚本 lx.request 错误回调抛错（已隔离）:', err2)
-        }
-      },
-    )
-    return req.canceleFn
+// ── runner 定位与子进程环境 ─────────────────────────────────────────────────
+
+/**
+ * 定位音源脚本 runner 可执行文件。
+ * - rollup 产物（lib/index.js）：`__dirname` 由 build.mjs banner 注入，取 lib/runner.cjs；
+ * - tsc 测试编译（.test-dist/src/engine/sandbox.js）：`__dirname` 为本机产物目录，取 runner.js。
+ */
+function resolveRunnerPath(): string {
+  const explicit = process.env.LX_MUSIC_RUNNER_PATH
+  if (explicit) return explicit
+  if (typeof __dirname !== 'string') {
+    throw new SourceScriptError('init', '无法解析音源脚本 runner 路径（当前环境无 __dirname，请显式传入 runnerPath）')
   }
+  const candidates = [join(__dirname, 'runner.cjs'), join(__dirname, 'runner.js')]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  return candidates[0]!
+}
+
+/** 子进程环境白名单：只透传系统路径与代理变量，不泄漏任何 DSH 机密。 */
+function buildChildEnv(): Record<string, string> {
+  const env: Record<string, string> = { NODE_ENV: process.env.NODE_ENV ?? 'production' }
+  const allowlist = [
+    'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'ComSpec', 'PATHEXT',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
+  ]
+  for (const key of allowlist) {
+    const value = process.env[key]
+    if (value) env[key] = value
+  }
+  return env
+}
+
+// ── 子进程消息（与 runner.js 对应）──────────────────────────────────────────
+
+interface WireCallResult {
+  type: 'call-result'
+  callId: number
+  ok: boolean
+  value?: unknown
+  error?: { message: string }
+}
+interface WireInitResult {
+  type: 'init-result'
+  ok: boolean
+  sources?: Record<string, SourceRegistration>
+  error?: string
+}
+interface WireConsole {
+  type: 'console'
+  level: string
+  text: string
+}
+interface WireHttpLog {
+  type: 'httplog'
+  url: string
+  statusCode?: number
+  error?: string
+  ms: number
+}
+type WireMessage = WireInitResult | WireCallResult | WireConsole | WireHttpLog
+
+interface PendingCall {
+  resolve(value: unknown): void
+  reject(err: Error): void
+  timer: ReturnType<typeof setTimeout>
 }
 
 /**
- * 在沙箱中加载音源脚本并等待初始化。
- * @param id 音源 id（用于错误信息）
+ * 在子进程中加载音源脚本并等待初始化完成。
+ * @param id 音源 id（用于错误信息与子进程 filename 标记）
  * @param script 脚本源码
  */
 export function loadSourceScript(id: string, script: string, options: SandboxOptions = {}): Promise<LoadedSourceScript> {
-  installProcessGuards()
   const initTimeoutMs = options.initTimeoutMs ?? 10_000
   const callTimeoutMs = options.callTimeoutMs ?? 20_000
+  const consoleLimit = options.consoleLimit ?? 200
+  const runnerPath = resolveRunnerPath()
   const metadata = extractScriptMetadata(script)
 
-  return new Promise<LoadedSourceScript>((resolvePromise, rejectPromise) => {
-    let settled = false
-    const settle = (fn: () => void): void => {
-      if (settled) return
-      settled = true
-      fn()
+  let child: ChildProcess | null = null
+  let spawning: Promise<void> | null = null
+  let pending = new Map<number, PendingCall>()
+  let seq = 0
+  let sources: Record<string, SourceRegistration> = {}
+  let disposed = false
+  let consoleCount = 0
+
+  const handle: LoadedSourceScript = {
+    id,
+    name: metadata.name ?? id,
+    version: metadata.version,
+    author: metadata.author,
+    description: metadata.description,
+    homepage: metadata.homepage,
+    sources,
+    call,
+    dispose,
+  }
+
+  function failPending(err: Error): void {
+    for (const [, p] of pending) {
+      clearTimeout(p.timer)
+      p.reject(err)
     }
+    pending.clear()
+  }
 
-    let initResolve: (() => void) | null = null
-    const initPromise = new Promise<void>((resolve) => {
-      initResolve = resolve
-    })
-
-    let requestHandler: ((data: { action: string; source: string; info: unknown }) => unknown) | null = null
-    let registeredSources: Record<string, SourceRegistration> = {}
-    let disposed = false
-
-    const lxObject = {
-      version: '2.0.0',
-      env: 'desktop',
-      platform: 'web',
-      currentScriptInfo: {
-        name: metadata.name ?? id,
-        description: metadata.description ?? '',
-        version: metadata.version ?? '1.0.0',
-        author: metadata.author ?? '',
-        homepage: metadata.homepage ?? '',
-        rawScript: script,
-      },
-      EVENT_NAMES: {
-        request: 'request',
-        inited: 'inited',
-        updateAlert: 'updateAlert',
-      },
-      utils: {
-        buffer: {
-          from: (d: unknown, e?: BufferEncoding) => (typeof d === 'string' ? Buffer.from(d, e) : toBuffer(d as Uint8Array)),
-          bufToString: (b: unknown, f: BufferEncoding) => (typeof b === 'string' ? b : toBuffer(b as Uint8Array).toString(f)),
-        },
-        crypto: {
-          md5: (str: string) => crypto.createHash('md5').update(str ?? '').digest('hex'),
-          aesEncrypt: (buffer: Uint8Array, mode: string, key: Uint8Array, iv: Uint8Array) => {
-            const cipher = crypto.createCipheriv(mode, toBuffer(key), toBuffer(iv))
-            return Buffer.concat([cipher.update(toBuffer(buffer)), cipher.final()])
-          },
-          rsaEncrypt: (buffer: Uint8Array, key: string | crypto.KeyLike) => crypto.publicEncrypt(key, toBuffer(buffer)),
-          randomBytes: (size: number) => crypto.randomBytes(size),
-        },
-        zlib: {
-          inflate: (buffer: Uint8Array) => new Promise<Buffer>((resolve, reject) => zlib.inflate(toBuffer(buffer), (err, out) => (err ? reject(err) : resolve(out)))),
-          deflate: (buffer: Uint8Array) => new Promise<Buffer>((resolve, reject) => zlib.deflate(toBuffer(buffer), (err, out) => (err ? reject(err) : resolve(out)))),
-        },
-      },
-      request: createLxRequest(),
-      send: (eventName: string, data: unknown): void => {
-        const dData = decontextify(data) as { sources?: Record<string, SourceRegistration> }
-        if (eventName === 'inited') {
-          if (dData && dData.sources) registeredSources = dData.sources
-          initResolve?.()
-        } else if (eventName === 'updateAlert') {
-          // 更新告警：记录但不阻断
-        }
-      },
-      on: (eventName: string, handler: (data: { action: string; source: string; info: unknown }) => unknown): void => {
-        if (eventName === 'request') requestHandler = handler
-      },
-    }
-
-    const sandbox: Record<string, unknown> = {
-      console,
-      setTimeout: (fn: () => void, ms?: number, ...args: unknown[]) => setTimeout(safeTimer(fn), ms, ...args),
-      clearTimeout,
-      setInterval: (fn: () => void, ms?: number, ...args: unknown[]) => setInterval(safeTimer(fn), ms, ...args),
-      clearInterval,
-      Buffer,
-      URL,
-      URLSearchParams,
-      TextEncoder,
-      TextDecoder,
-      atob: (s: string) => Buffer.from(s, 'base64').toString('binary'),
-      btoa: (s: string) => Buffer.from(s, 'binary').toString('base64'),
-      crypto: {
-        getRandomValues: (arr: Uint8Array) => crypto.randomFillSync(arr),
-      },
-      process: {
-        nextTick: (fn: () => void) => setTimeout(safeTimer(fn), 0),
-        env: { NODE_ENV: process.env.NODE_ENV ?? 'production' },
-      },
-      lx: lxObject,
-    }
-    sandbox.global = sandbox
-    sandbox.window = sandbox
-    sandbox.globalThis = sandbox
-
-    let context: vm.Context
+  function killChild(): void {
+    if (!child) return
     try {
-      context = vm.createContext(sandbox)
-    } catch (err) {
-      settle(() => rejectPromise(new SourceScriptError('init', `沙箱创建失败: ${err instanceof Error ? err.message : String(err)}`)))
-      return
+      child.kill()
+    } catch {
+      // 已退出
     }
+    child = null
+  }
 
-    const call = async (action: string, source: string, info: unknown): Promise<unknown> => {
-      if (disposed) throw new SourceScriptError('call', `音源 ${id} 已卸载`)
-      if (!requestHandler) throw new SourceScriptError('call', `音源 ${id} 未注册 request 处理器`)
-      const input = { action, source, info }
-      const result = await Promise.race([
-        Promise.resolve(requestHandler(input)),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new SourceScriptError('call', `音源 ${id} 请求超时（>${callTimeoutMs}ms）`)), callTimeoutMs)),
-      ])
-      return decontextify(result)
+  /** 启动子进程并完成 init（幂等：已有存活子进程时直接返回）。 */
+  function startChild(): Promise<void> {
+    if (child) return Promise.resolve()
+    if (!existsSync(runnerPath)) {
+      return Promise.reject(new SourceScriptError('init', `音源脚本 runner 不存在: ${runnerPath}（请确认构建产物包含 lib/runner.cjs）`))
     }
+    return new Promise<void>((resolveStart, rejectStart) => {
+      let initResolved = false
+      let initFailed = false
 
-    // 初始化超时
-    const initTimer = setTimeout(() => {
-      if (!settled) {
-        dispose()
-        settle(() => rejectPromise(new SourceScriptError('init', `音源 ${id} 初始化超时（未调用 lx.send("inited")）`)))
+      const failInit = (err: SourceScriptError): void => {
+        if (initResolved || initFailed) return
+        initFailed = true
+        clearTimeout(initTimer)
+        failPending(err)
+        killChild()
+        rejectStart(err)
       }
-    }, initTimeoutMs)
 
-    const dispose = (): void => {
-      disposed = true
-      clearTimeout(initTimer)
-      if (context) {
+      const proc = spawn(process.execPath, [runnerPath], {
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+        env: buildChildEnv(),
+        cwd: tmpdir(),
+        windowsHide: true,
+      })
+      child = proc
+      // 不因子进程句柄拖住宿主事件循环（测试进程/宿主退出时，子进程经 IPC disconnect 自清理）
+      proc.unref()
+
+      const initTimer = setTimeout(() => {
+        failInit(new SourceScriptError('init', `音源 ${id} 初始化超时（>${initTimeoutMs}ms，未调用 lx.send("inited")）`))
+      }, initTimeoutMs)
+
+      proc.on('spawn', () => {
         try {
-          vm.runInContext('', context)
-        } catch {
-          // 忽略清理错误
+          proc.send({
+            type: 'init',
+            id,
+            script,
+            initTimeoutMs,
+            allowPrivate: options.allowPrivateNetwork === true,
+            metadata,
+          })
+        } catch (err) {
+          failInit(new SourceScriptError('init', `音源 ${id} 无法向子进程发送初始化消息: ${err instanceof Error ? err.message : String(err)}`))
         }
-      }
-    }
+      })
 
-    try {
-      vm.runInContext(script, context, { filename: `source_${id}.js`, timeout: initTimeoutMs })
-    } catch (err) {
-      clearTimeout(initTimer)
-      settle(() => rejectPromise(new SourceScriptError('init', `音源 ${id} 执行失败: ${err instanceof Error ? err.message : String(err)}`)))
-      return
-    }
+      proc.on('message', (msg: WireMessage) => {
+        try {
+          switch (msg.type) {
+            case 'console': {
+              if (consoleCount++ < consoleLimit) {
+                const level = msg.level === 'error' ? 'error' : msg.level === 'warn' ? 'warn' : msg.level === 'debug' ? 'debug' : 'log'
+                console[level](`[lx-music sandbox:${id}] ${msg.text}`)
+              }
+              break
+            }
+            case 'httplog': {
+              pushRequestLog({ ts: Date.now(), url: msg.url, statusCode: msg.statusCode, error: msg.error, ms: msg.ms })
+              break
+            }
+            case 'init-result': {
+              clearTimeout(initTimer)
+              if (msg.ok) {
+                initResolved = true
+                // 原地更新（handle.sources 引用同一对象，重载后再赋值不会生效）
+                for (const key of Object.keys(sources)) delete sources[key]
+                Object.assign(sources, msg.sources ?? {})
+                resolveStart()
+              } else {
+                failInit(new SourceScriptError('init', `音源 ${id} 初始化失败: ${msg.error ?? '未知错误'}`))
+              }
+              break
+            }
+            case 'call-result': {
+              const p = pending.get(msg.callId)
+              if (!p) break
+              pending.delete(msg.callId)
+              clearTimeout(p.timer)
+              if (msg.ok) {
+                p.resolve(msg.value)
+              } else {
+                p.reject(new SourceScriptError('call', `音源 ${id} 调用失败: ${msg.error?.message ?? '未知错误'}`))
+              }
+              break
+            }
+          }
+        } catch (err) {
+          console.warn('[lx-music sandbox] 处理子进程消息失败:', err)
+        }
+      })
 
-    void initPromise.then(() => {
-      clearTimeout(initTimer)
-      settle(() =>
-        resolvePromise({
-          id,
-          name: metadata.name ?? id,
-          version: metadata.version,
-          author: metadata.author,
-          description: metadata.description,
-          homepage: metadata.homepage,
-          sources: registeredSources,
-          call,
-          dispose,
-        }),
-      )
+      proc.on('error', (err) => {
+        failInit(new SourceScriptError('init', `音源 ${id} 子进程启动失败: ${err.message}`))
+      })
+
+      proc.on('exit', (code, signal) => {
+        clearTimeout(initTimer)
+        const exitDesc = `code=${code ?? 'null'}${signal ? ` signal=${signal}` : ''}`
+        if (!initResolved && !initFailed) {
+          // 初始化期间退出 → 本次加载失败，下次 call 会重新启动
+          failInit(new SourceScriptError('init', `音源 ${id} 子进程在初始化期间退出（${exitDesc}）`))
+        } else if (initResolved) {
+          // init 完成后的异常退出：挂起中的调用失败；下一次 call 自动重启
+          child = null
+          failPending(new SourceScriptError('call', `音源 ${id} 子进程异常退出（${exitDesc}），将在下次调用时重启`))
+        }
+      })
     })
-  })
+  }
+
+  function ensureStarted(): Promise<void> {
+    if (child) return Promise.resolve()
+    if (!spawning) {
+      const start = startChild().finally(() => {
+        spawning = null
+      })
+      spawning = start
+    }
+    return spawning
+  }
+
+  async function call(action: string, source: string, info: unknown): Promise<unknown> {
+    if (disposed) throw new SourceScriptError('call', `音源 ${id} 已卸载`)
+    await ensureStarted()
+    if (disposed) throw new SourceScriptError('call', `音源 ${id} 已卸载`)
+    if (!child) throw new SourceScriptError('call', `音源 ${id} 子进程不可用`)
+    const callId = ++seq
+    return new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(callId)
+        const err = new SourceScriptError('call', `音源 ${id} 请求超时（>${callTimeoutMs}ms），已终止该音源子进程，下次调用将自动重启`)
+        // 一个调用卡死（如同步死循环）说明进程整体不可用：终止全部挂起调用与子进程
+        failPending(err)
+        killChild()
+        reject(err)
+      }, callTimeoutMs)
+      pending.set(callId, { resolve, reject, timer })
+      try {
+        child!.send({ type: 'call', callId, action, source, info })
+      } catch (err) {
+        clearTimeout(timer)
+        pending.delete(callId)
+        reject(new SourceScriptError('call', `音源 ${id} 消息发送失败: ${err instanceof Error ? err.message : String(err)}`))
+      }
+    })
+  }
+
+  function dispose(): void {
+    if (disposed) return
+    disposed = true
+    failPending(new SourceScriptError('call', `音源 ${id} 已卸载`))
+    if (child) {
+      try {
+        child.send({ type: 'shutdown' })
+      } catch {
+        // 通道已关闭
+      }
+      killChild()
+    }
+  }
+
+  return startChild().then(() => handle)
 }

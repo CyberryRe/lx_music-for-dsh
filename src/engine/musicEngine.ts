@@ -1,6 +1,6 @@
 // 内置音源引擎（EngineProvider）：完全独立于 lxserver。
 // - 搜索：内置音乐 SDK（移植自 lx-music-desktop，五平台）
-// - 直链解析：node:vm 音源脚本沙箱（lx-music-desktop 音源脚本协议）
+// - 直链解析：音源脚本子进程沙箱（lx-music-desktop 音源脚本协议，隔离执行）
 // - 音源管理：本地持久化（storage domain sources 表）
 
 import type { MusicInfo, MusicQualityType, MusicSource, MusicUrlResult, Quality, SearchOutcome, SearchRequest, SourceEntry } from '../shared/types'
@@ -291,5 +291,11 @@ export class EngineProvider implements Provider {
 
   async ping(): Promise<boolean> {
     return true
+  }
+
+  /** 释放全部已加载音源子进程（插件卸载/禁用时调用；之后 reload() 可重建）。 */
+  dispose(): void {
+    for (const script of this.scripts.values()) script.dispose()
+    this.scripts.clear()
   }
 }

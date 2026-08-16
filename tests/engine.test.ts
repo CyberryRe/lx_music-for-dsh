@@ -2,10 +2,11 @@
 // 音源管理（上传/启停/删除/排序/校验）、SDK 结果规范化、本地存储。
 
 import { describe, expect, it } from './mini'
-import { loadSourceScript, extractScriptMetadata, SourceScriptError } from '../src/engine/sandbox'
+import { loadSourceScript, extractScriptMetadata, SourceScriptError, getSandboxRequestLog } from '../src/engine/sandbox'
 import { EngineProvider } from '../src/engine/musicEngine'
 import { DomainSourceStore, MemorySourceStore } from '../src/engine/sourceStore'
 import { sdkItemToMusicInfo } from '../src/sdk'
+import { createServer } from 'node:http'
 import type { MusicInfo } from '../src/shared/types'
 
 const SAMPLE_SCRIPT = `/**
@@ -111,6 +112,54 @@ lx.send('inited', { sources: { wy: {} } })`
     const err = new SourceScriptError('call', 'x')
     expect(err.stage).toBe('call')
     expect(err).toBeInstanceOf(Error)
+  })
+})
+
+describe('音源脚本子进程隔离', () => {
+  it('lx.request 默认拦截内网地址（SSRF 防护）', async () => {
+    const script = `lx.on('request', () => new Promise((resolve) => {
+  lx.request('http://127.0.0.1:9/x', {}, (err) => resolve(err ? 'blocked:' + err.message : 'unexpected-success'))
+}))
+lx.send('inited', { sources: { wy: {} } })`
+    const loaded = await loadSourceScript('ssrf.js', script, { initTimeoutMs: 5000 })
+    const r = await loaded.call('ssrf', 'wy', {})
+    expect(String(r)).toMatch(/网络策略拦截/)
+    // 拦截记录同样进入请求日志（供诊断）
+    const entries = getSandboxRequestLog()
+    expect(entries.some((e) => e.url.includes('127.0.0.1:9') && e.error !== undefined)).toBe(true)
+    loaded.dispose()
+  })
+
+  it('lx.request 在测试模式（allowPrivateNetwork）下可访问本地服务', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ ok: true, path: req.url }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    const port = typeof address === 'object' && address !== null ? address.port : 0
+    const script = `lx.on('request', () => new Promise((resolve) => {
+  lx.request('http://127.0.0.1:${port}/p', { responseType: 'json' }, (err, resp, body) => {
+    resolve(err ? 'ERR:' + err.message : resp.statusCode + ':' + body.path + ':' + JSON.stringify(body))
+  })
+}))
+lx.send('inited', { sources: { wy: {} } })`
+    const loaded = await loadSourceScript('net.js', script, { initTimeoutMs: 5000, allowPrivateNetwork: true })
+    const r = await loaded.call('net', 'wy', {})
+    expect(r).toBe('200:/p:{"ok":true,"path":"/p"}')
+    loaded.dispose()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  it('同步死循环只卡住子进程（宿主事件循环不受影响，调用超时杀进程兜底）', async () => {
+    const loopScript = `lx.on('request', () => { while (true) {} })
+lx.send('inited', { sources: { wy: {} } })`
+    const loaded = await loadSourceScript('loop.js', loopScript, { initTimeoutMs: 5000, callTimeoutMs: 1500 })
+    const startedAt = Date.now()
+    await expect(loaded.call('musicUrl', 'wy', {})).rejects.toMatchObject({ stage: 'call' })
+    // 超时兜底在子进程卡死时仍然生效（宿主计时器未被卡死）；且不阻塞测试套件继续执行
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1300)
+    loaded.dispose()
   })
 })
 

@@ -29,7 +29,8 @@ lx_plugin/
 │   ├── mock.ts              # 内置 mock 音源（演示/测试）
 │   ├── ratelimit.ts         # 滑动窗口限流器
 │   ├── engine/              # 内置音源引擎（完全独立）
-│   │   ├── sandbox.ts       #   node:vm 音源脚本沙箱（lx 协议，超时/隔离）
+│   │   ├── sandbox.ts       #   子进程沙箱宿主：spawn runner + IPC 协议 + 超时杀进程兜底
+│   │   ├── runner.js        #   子进程（隔离边界）：lx 协议执行、SSRF 网络策略、日志转发
 │   │   ├── musicEngine.ts   #   引擎调度（脚本轮询/重试/音源管理）
 │   │   └── sourceStore.ts   #   音源脚本本地持久化
 │   ├── sdk/                 # 内置音乐 SDK（移植 lx-music-desktop，Apache-2.0）
@@ -95,6 +96,10 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
   必须在设置窗口「音源管理」页导入 lx-music-desktop 格式的音源脚本
   （文件/URL/粘贴，导入后自动启用并持久化）；**不导入任何音源脚本时，直链解析会失败**
   （无脚本可轮询），这不是插件缺陷，而是 lx-music-desktop 生态的固有设计。
+- **音源脚本隔离**：第三方脚本在**独立子进程**执行（每个音源一个子进程，`lib/runner.cjs`），
+  宿主只通过 IPC 交换 JSON；子进程环境白名单注入（不含 DSH 机密）、`lx.request` 默认拦截
+  私网/回环/链路本地地址（SSRF 防护）、初始化/调用超时自动终止子进程。脚本的异常、逃逸尝试、
+  死循环只影响其子进程，宿主进程不受影响。
 - **无网络演示**：如需完全离线体验，显式设 `providerMode: mock`（内置 17 首示例歌曲 +
   SoundHelix 示例音频直链），UI 与 LLM 工具全流程可用。
 
@@ -103,9 +108,10 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 ```bash
 npm run build
 # 产物：
-#   lib/index.js    host 插件（ESM，external：@deepseek-ai/*、zod、schemastery）
+#   lib/index.js    host 插件（ESM，external：@deepseek-ai/*、zod、schemastery；banner 注入 __dirname）
+#   lib/runner.cjs  音源脚本隔离子进程（CJS，仅供 sandbox.ts spawn 执行，随包发布）
 #   lib/client.js   浏览器 bundle（window.__ModuleLoader__.load 包装，external：react 等 kernel 模块）
-npm run pack        # 生成 lx-music-for-dsh-0.2.1.tgz
+npm run pack        # 生成 lx-music-for-dsh-<version>.tgz
 ```
 
 ## 6. 安装到 DSH（web 模式）
