@@ -12,6 +12,7 @@ import type {
   MusicInfo,
   MusicUrlResult,
   PlayLogEntry,
+  PlayMode,
   PlayerState,
   PluginSettings,
   PlaybackStatus,
@@ -45,6 +46,7 @@ interface PersistedState {
   quality: Quality
   volume: number
   mute: boolean
+  playMode?: PlayMode
   settings?: PluginSettings
 }
 
@@ -134,6 +136,7 @@ export class PlaybackService extends TypertRemoteService {
       quality: persisted.quality,
       volume: persisted.volume,
       mute: persisted.mute,
+      playMode: persisted.playMode ?? 'list',
       version: 1,
     }
     this.provider = this.buildProvider()
@@ -154,7 +157,7 @@ export class PlaybackService extends TypertRemoteService {
     }
   }
 
-  private loadPersisted(): { playlist: MusicInfo[]; currentIndex: number; quality: Quality; volume: number; mute: boolean; settings?: PluginSettings } {
+  private loadPersisted(): { playlist: MusicInfo[]; currentIndex: number; quality: Quality; volume: number; mute: boolean; playMode?: PlayMode; settings?: PluginSettings } {
     const fallback: PersistedState = { playlist: [], currentIndex: -1, quality: this.settings.defaultQuality, volume: 1, mute: false }
     if (!this.storage) return fallback
     try {
@@ -162,12 +165,14 @@ export class PlaybackService extends TypertRemoteService {
       if (!raw || typeof raw !== 'object') return fallback
       const playlist = jsonSafe(Array.isArray(raw.playlist) ? (raw.playlist as MusicInfo[]) : [])
       const currentIndex = typeof raw.currentIndex === 'number' && raw.currentIndex < playlist.length ? raw.currentIndex : -1
+      const playMode = raw.playMode === 'single' || raw.playMode === 'order' || raw.playMode === 'shuffle' || raw.playMode === 'list' ? raw.playMode : undefined
       return {
         playlist,
         currentIndex,
         quality: (raw.quality as Quality | undefined) ?? this.settings.defaultQuality,
         volume: typeof raw.volume === 'number' ? raw.volume : 1,
         mute: raw.mute === true,
+        playMode,
         settings: raw.settings as PluginSettings | undefined,
       }
     } catch (err) {
@@ -187,6 +192,7 @@ export class PlaybackService extends TypertRemoteService {
         quality: this.state.quality,
         volume: this.state.volume,
         mute: this.state.mute,
+        playMode: this.state.playMode,
         settings: this.settings,
       }
       this.storage!.global.set(payload).catch((err) => console.warn('[lxPlayback] 持久化失败:', err))
@@ -262,18 +268,61 @@ export class PlaybackService extends TypertRemoteService {
     return this.state
   }
 
+  /**
+   * 下一首（按播放模式）：
+   * - list/single：循环下一首（单曲循环下"手动切歌"同样前进，单曲重播由 client 在 ended 时本地处理）
+   * - shuffle：随机选一首（列表只有 1 首时重播当前）
+   * - order：顺序下一首；已在最后一首时保持当前曲目并停止
+   */
   @Remote('next')
   next(): PlayerState {
     if (this.state.playlist.length === 0) throw new Error('播放列表为空')
-    const idx = (this.state.currentIndex + 1) % this.state.playlist.length
+    const len = this.state.playlist.length
+    if (this.state.playMode === 'shuffle') {
+      if (len === 1) return this.play({ index: 0 })
+      let idx = this.state.currentIndex
+      while (idx === this.state.currentIndex) idx = Math.floor(Math.random() * len)
+      return this.play({ index: idx })
+    }
+    if (this.state.playMode === 'order') {
+      const idx = this.state.currentIndex + 1
+      if (idx >= len) {
+        // 顺序播放到末尾：停止（保持当前曲目，进度置为末尾）
+        this.state.status = 'stoped'
+        this.state.progress = this.state.duration
+        this.bump()
+        this.schedulePersist()
+        return this.state
+      }
+      return this.play({ index: idx })
+    }
+    const idx = (this.state.currentIndex + 1) % len
     return this.play({ index: idx })
   }
 
+  /** 上一首：order 模式到列表开头后重播第一首，其余模式循环回退。 */
   @Remote('prev')
   prev(): PlayerState {
     if (this.state.playlist.length === 0) throw new Error('播放列表为空')
-    const idx = (this.state.currentIndex - 1 + this.state.playlist.length) % this.state.playlist.length
+    const len = this.state.playlist.length
+    if (this.state.playMode === 'order') {
+      const idx = Math.max(0, this.state.currentIndex - 1)
+      return this.play({ index: idx })
+    }
+    const idx = (this.state.currentIndex - 1 + len) % len
     return this.play({ index: idx })
+  }
+
+  /** 切换播放模式：list=列表循环 / single=单曲循环 / order=顺序播放 / shuffle=随机播放。 */
+  @Remote('setPlayMode')
+  setPlayMode(mode: PlayMode): PlayerState {
+    if (mode !== 'list' && mode !== 'single' && mode !== 'order' && mode !== 'shuffle') {
+      throw new Error(`未知播放模式: ${String(mode)}`)
+    }
+    this.state.playMode = mode
+    this.bump()
+    this.schedulePersist()
+    return this.state
   }
 
   @Remote('seek')

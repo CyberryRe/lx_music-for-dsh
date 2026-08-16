@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { LxStore } from './store'
 import { secondsToInterval } from '../shared/types'
+import { PLAY_MODES, PLAY_MODE_LABEL, nextPlayMode } from './playModes'
 
 export interface CardProps {
   store: LxStore
@@ -22,6 +23,8 @@ export function LxMusicCard(props: CardProps): JSX.Element {
   const duration = state?.duration ?? 0
   const status = state?.status ?? 'stoped'
   const playing = status === 'playing'
+  const playMode = state?.playMode ?? 'list'
+  const modeMeta = PLAY_MODES.find((m) => m.value === playMode) ?? PLAY_MODES[0]!
 
   // 点击外部关闭播放列表 popover
   useEffect(() => {
@@ -118,6 +121,18 @@ export function LxMusicCard(props: CardProps): JSX.Element {
         <div className="lxm-btn-row" ref={listRef}>
           <button
             type="button"
+            className="lxm-btn lxm-btn-mode"
+            aria-label={PLAY_MODE_LABEL[playMode]}
+            title={`播放模式：${PLAY_MODE_LABEL[playMode]}（点击循环切换）`}
+            onClick={(e) => {
+              e.stopPropagation()
+              void store.setPlayMode(nextPlayMode(playMode))
+            }}
+          >
+            {modeMeta.icon}
+          </button>
+          <button
+            type="button"
             className="lxm-btn"
             aria-label="播放列表"
             title="播放列表"
@@ -131,9 +146,24 @@ export function LxMusicCard(props: CardProps): JSX.Element {
           {listOpen && (
             <div
               className="lxm-card"
-              style={{ position: 'fixed', right: 12, bottom: 96, width: 280, maxHeight: 260, zIndex: 10001, overflowY: 'auto' }}
+              style={{ position: 'fixed', right: 12, bottom: 96, width: 280, maxHeight: 300, zIndex: 10001, overflowY: 'auto' }}
               onClick={(e) => e.stopPropagation()}
             >
+              <div className="lxm-modes">
+                {PLAY_MODES.map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    className="lxm-mode-btn"
+                    data-active={playMode === m.value}
+                    title={m.label}
+                    onClick={() => void store.setPlayMode(m.value)}
+                  >
+                    <span>{m.icon}</span>
+                    {m.label}
+                  </button>
+                ))}
+              </div>
               {(state?.playlist ?? []).length === 0 && <div className="lxm-empty">播放列表为空</div>}
               {(state?.playlist ?? []).map((m, i) => (
                 <div

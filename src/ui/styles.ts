@@ -45,7 +45,23 @@ export const CSS = `
 .lxm-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.15)); color: var(--dsw-alias-label-primary, #e6e6e6); }
 .lxm-btn-primary { color: var(--dsw-alias-state-business-primary, #4c8dff); }
 .lxm-btn:disabled { opacity: 0.4; cursor: default; }
+.lxm-btn-mode { width: auto; min-width: 26px; padding: 0 2px; font-size: 12px; }
 .lxm-btn-row { display: flex; gap: 2px; }
+.lxm-modes {
+  display: inline-flex; gap: 2px; padding: 2px; flex: none;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.08));
+  border-radius: 8px;
+}
+.lxm-mode-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  border: none; background: transparent; color: var(--dsw-alias-label-tertiary, #999);
+  font-size: 11px; padding: 3px 7px; border-radius: 6px; cursor: pointer;
+  white-space: nowrap; line-height: 1;
+}
+.lxm-mode-btn:hover { color: var(--dsw-alias-label-primary, #e6e6e6); }
+.lxm-mode-btn[data-active="true"] {
+  background: var(--dsw-alias-state-business-primary, #4c8dff); color: #fff;
+}
 
 .lxm-overlay {
   position: fixed; inset: 0; z-index: 9999;

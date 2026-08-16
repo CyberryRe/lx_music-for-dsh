@@ -6,6 +6,7 @@
 import type {
   AddPosition,
   MusicInfo,
+  PlayMode,
   PlayerState,
   PluginSettings,
   Quality,
@@ -30,6 +31,7 @@ export interface LxRemote {
   setVolume(volume: number): Promise<PlayerState>
   setMute(mute: boolean): Promise<PlayerState>
   setQuality(quality: Quality): Promise<PlayerState>
+  setPlayMode(mode: PlayMode): Promise<PlayerState>
   reportProgress(p: { progress: number; duration: number; status: string }): Promise<void>
   addMusic(musics: MusicInfo[], position: AddPosition): Promise<PlayerState>
   removeMusic(id: string): Promise<PlayerState>
@@ -258,6 +260,15 @@ export class LxStore {
   }
 
   private onEnded = (): void => {
+    const st = this.snapshot.state
+    if (st?.playMode === 'single' && this.audio && st.current) {
+      // 单曲循环：当前曲目播完本地重播（不切歌，进度/状态经 reportProgress 上报）
+      this.audio.currentTime = 0
+      void this.audio.play().catch(() => undefined)
+      void this.remote.reportProgress({ progress: 0, duration: st.duration, status: 'playing' })
+      return
+    }
+    // 其余模式：交给 host 按播放模式决定下一首（列表循环/随机/顺序）
     void this.remote.next().catch(() => undefined)
   }
 
@@ -388,6 +399,15 @@ export class LxStore {
   async setQuality(quality: Quality): Promise<void> {
     try {
       const st = await this.remote.setQuality(quality)
+      this.applyState(st)
+    } catch (err) {
+      this.patch({ error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  async setPlayMode(mode: PlayMode): Promise<void> {
+    try {
+      const st = await this.remote.setPlayMode(mode)
       this.applyState(st)
     } catch (err) {
       this.patch({ error: err instanceof Error ? err.message : String(err) })

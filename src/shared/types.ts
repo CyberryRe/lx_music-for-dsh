@@ -45,6 +45,15 @@ export interface MusicInfo {
 /** 播放状态（LX.Player.Status 对齐的轻量版）。 */
 export type PlaybackStatus = 'playing' | 'paused' | 'error' | 'stoped'
 
+/**
+ * 播放模式：
+ * - list：列表循环（播完最后一首回到第一首，默认）
+ * - single：单曲循环（当前曲目播完自动重播）
+ * - order：顺序播放（播完最后一首停止）
+ * - shuffle：随机播放（自动/手动切歌时随机选曲）
+ */
+export type PlayMode = 'list' | 'single' | 'order' | 'shuffle'
+
 /** 直链解析结果。 */
 export interface MusicUrlResult {
   url: string
@@ -64,6 +73,7 @@ export interface PlayerState {
   quality: Quality
   volume: number // 0-1
   mute: boolean
+  playMode: PlayMode // 列表循环/单曲循环/顺序播放/随机播放
   version: number // 状态版本号，client 用于 diff
 }
 
@@ -142,6 +152,8 @@ export interface PluginSettings {
 /** 点歌日志条目。 */
 export interface PlayLogEntry {
   time: string // ISO
+  /** 操作类型：search / play / playlist.add / next / prev / control.* / search_and_play 等。 */
+  action?: string
   query: string
   limit: number
   autoPlay: boolean
@@ -196,6 +208,124 @@ export interface SearchAndPlayOutput {
   played: boolean
   playlistPosition: number
   note?: string
+}
+
+/** 搜索结果条目（music_search / search_and_play 通用）。 */
+export interface SearchResultItem {
+  id: string
+  name: string
+  singer: string
+  source: string
+  interval: string
+  qualitys: Array<{ type: string; size: string }>
+  picUrl: string
+  /** 直链预览（未解析或解析失败为空字符串）。 */
+  url: string
+}
+
+/** music_search 工具输入。 */
+export interface MusicSearchArgs {
+  query: string
+  limit?: number
+  source?: MusicSource
+  singer?: string
+  with_url?: boolean
+}
+
+/** music_search 工具输出。 */
+export interface MusicSearchOutput {
+  results: SearchResultItem[]
+  usedSource: string
+  note: string
+}
+
+/** music_play 工具输入（query 与 index 二选一）。 */
+export interface MusicPlayArgs {
+  /** 搜索关键词：搜索并播放（与 index 二选一）。 */
+  query?: string
+  /** 播放列表序号（从 0 开始，与 query 二选一）。 */
+  index?: number
+  /** query 搜索结果的第几首（从 0 开始），默认 0。 */
+  result_index?: number
+  /** 指定搜索平台。 */
+  source?: MusicSource
+  /** 是否立即播放，默认 true；false 时仅加入播放列表。 */
+  auto_play?: boolean
+  /** 加入播放列表的位置：tail=队尾（默认）/ next=当前曲目之后。 */
+  position?: AddPosition
+}
+
+/** 播放状态摘要（工具输出共用）。 */
+export interface MusicStateSummary {
+  played: boolean
+  playlistPosition: number
+  current: { name: string; singer: string; source: string } | null
+  status: string
+  playlistCount: number
+}
+
+/** music_play 工具输出。 */
+export interface MusicPlayOutput extends MusicStateSummary {
+  note: string
+}
+
+/** music_prev / music_next 工具输出。 */
+export type MusicNavOutput = MusicStateSummary
+
+/** 播放列表操作。 */
+export type MusicPlaylistAction = 'list' | 'add' | 'remove' | 'clear' | 'export'
+
+/** music_playlist 工具输入。 */
+export interface MusicPlaylistArgs {
+  action: MusicPlaylistAction
+  /** add：搜索关键词。 */
+  query?: string
+  /** add：加入数量，默认 5（1-20）。 */
+  limit?: number
+  /** add：指定搜索平台。 */
+  source?: MusicSource
+  /** add：加入位置 tail/next，默认 tail。 */
+  position?: AddPosition
+  /** remove：序号（从 0 开始，与 id 二选一）。 */
+  index?: number
+  /** remove：歌曲 id（与 index 二选一）。 */
+  id?: string
+}
+
+/** music_playlist 工具输出。 */
+export interface MusicPlaylistOutput {
+  action: string
+  count: number
+  currentIndex: number
+  playlist: Array<{ index: number; id: string; name: string; singer: string; source: string; interval: string }>
+  /** export 操作时的文本导出。 */
+  text?: string
+  note: string
+}
+
+/** 播放控制操作。 */
+export type MusicControlAction = 'toggle' | 'pause' | 'resume' | 'seek' | 'volume' | 'quality' | 'playMode'
+
+/** music_control 工具输入。 */
+export interface MusicControlArgs {
+  action: MusicControlAction
+  /** seek：目标进度（秒）。 */
+  seconds?: number
+  /** volume：音量 0-1。 */
+  volume?: number
+  /** quality：目标音质。 */
+  quality?: Quality
+  /** playMode：列表循环/单曲循环/顺序播放/随机播放。 */
+  play_mode?: PlayMode
+}
+
+/** music_control 工具输出。 */
+export interface MusicControlOutput extends MusicStateSummary {
+  action: string
+  volume: number
+  quality: string
+  playMode: string
+  note: string
 }
 
 /** 格式化时长 "03:55" → 秒。 */

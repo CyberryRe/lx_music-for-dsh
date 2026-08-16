@@ -6,13 +6,18 @@ Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
 ## 功能
 
 - **侧边栏迷你播放卡片**（位于「设置」按钮上方）：封面缩略图、歌名-歌手、可拖动/点击跳转的
-  进度条（与播放器双向同步）、上一首/播放暂停/下一首、播放列表弹窗、设置齿轮。
+  进度条（与播放器双向同步）、上一首/播放暂停/下一首、播放模式切换按钮（列表循环/单曲循环/
+  随机/顺序，点击循环切换）、播放列表弹窗（内含四模式直接选择）、设置齿轮。
 - **主窗口**（点击卡片主体打开，可调大小、记忆位置）：搜索（关键词/歌手/平台过滤）、
-  搜索结果（音质标识、时长、+队尾 / +下一首）、播放列表管理（拖拽排序、删除、清空、导出为文本）。
+  搜索结果（音质标识、时长、+队尾 / +下一首）、播放列表管理（拖拽排序、删除、清空、导出为文本，
+  播放模式分段按钮）。
+- **播放模式**：列表循环（默认，播完回第一首）/ 单曲循环（播完自动重播）/ 随机播放（不重复当前曲目）/
+  顺序播放（播完最后一首停止）；host 侧权威状态，持久化，UI 与 LLM 工具共用。
 - **设置窗口**（点击齿轮打开）：音源管理（文件/URL/粘贴导入并自动启用、启用/禁用/删除/排序）、
   音质策略（全局默认音质、每音源平台优先级）、自动拉取规则（切歌自动最高音质、降级策略）。
-- **LLM 点歌工具 `search_and_play`**：搜索 → 直链预览 → 加入播放列表（或直接播放）；
-  内置滑动窗口防刷（默认 6 次/分钟）与点歌日志。
+- **细粒度 LLM 音乐工具集**：`music_search`（搜索）/ `music_play`（播放）/ `music_playlist`
+  （播放列表管理）/ `music_prev` / `music_next` / `music_control`（暂停、音量、音质、播放模式等），
+  另保留兼容入口 `search_and_play`（一步点歌）；内置滑动窗口防刷（默认 6 次/分钟）与带 action 的操作日志。
 
 ## 架构
 
@@ -20,8 +25,9 @@ Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
   五平台）；直链解析由**内置音源脚本引擎**提供（node:vm 沙箱执行 lx-music-desktop 音源脚本协议，
   与 lx-music-desktop v2.12.2 一致——直链 100% 依赖音源脚本）；播放为浏览器 HTML5 Audio。
   无需任何外部服务即可使用。
-- host（Node）：`PlaybackService`（Typert Remote `lxPlayback`，播放权威状态 + storage 持久化）、
-  `search_and_play` 工具、内置 SDK 搜索、音源脚本沙箱（导入/启用/排序/删除本地管理）、
+- host（Node）：`PlaybackService`（Typert Remote `lxPlayback`，播放权威状态 + 播放模式 + storage 持久化）、
+  细粒度音乐工具集（`music_search`/`music_play`/`music_playlist`/`music_prev`/`music_next`/`music_control`
+  及兼容 `search_and_play`）、内置 SDK 搜索、音源脚本沙箱（导入/启用/排序/删除本地管理）、
   可选 lxserver 客户端（超时 10s / 重试 2 次 / 音质与平台降级链）。
 - client（浏览器）：React UI（注入 `sidebar.footer.action` slot）+ HTML5 Audio 播放引擎，
   轮询 host 状态（500ms）diff 应用，进度节流上报（1s）。
@@ -67,5 +73,5 @@ manifest.json  插件清单
 src/index.ts   host 入口
 src/client.ts  client 入口
 src/ui/        React 组件
-tests/         单元测试（90 例）
+tests/         单元测试（117 例）
 ```

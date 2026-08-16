@@ -5,6 +5,7 @@ import { useState, useSyncExternalStore } from 'react'
 import type { LxStore } from './store'
 import type { DraggableWindowProps } from './Modal'
 import type { MusicInfo, MusicSource } from '../shared/types'
+import { PLAY_MODES } from './playModes'
 
 const SOURCE_LABEL: Record<string, string> = {
   kw: '酷我',
@@ -174,6 +175,21 @@ export function LxMainWindow(props: MainWindowProps): JSX.Element {
       ) : (
         <div className="lxm-panel">
           <div className="lxm-toolbar">
+            <div className="lxm-modes" title="播放模式">
+              {PLAY_MODES.map((m) => (
+                <button
+                  key={m.value}
+                  type="button"
+                  className="lxm-mode-btn"
+                  data-active={state?.playMode === m.value}
+                  title={m.label}
+                  onClick={() => void store.setPlayMode(m.value)}
+                >
+                  <span>{m.icon}</span>
+                  {m.label}
+                </button>
+              ))}
+            </div>
             <button type="button" className="lxm-btn" disabled={playlist.length === 0} onClick={() => void store.clearList()}>清空列表</button>
             <button type="button" className="lxm-btn" disabled={playlist.length === 0} onClick={() => void downloadExport()}>导出为文本</button>
             <span className="lxm-field-hint">拖拽行可排序，点击行播放</span>

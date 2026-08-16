@@ -87,6 +87,7 @@ export const LXP_REMOTE_CONTRIBUTION = {
     desc('setVolume', [jsonParam('volume', z.number())]),
     desc('setMute', [jsonParam('mute', z.boolean())]),
     desc('setQuality', [jsonParam('quality', z.string())]),
+    desc('setPlayMode', [jsonParam('mode', z.string())]),
     desc('reportProgress', [
       jsonParam('p', z.object({ progress: z.number(), duration: z.number(), status: z.string() }).passthrough()),
     ]),

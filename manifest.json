@@ -2,8 +2,8 @@
   "$schema": "./docs/manifest.schema.json",
   "id": "lx-music-for-dsh",
   "name": "LX Music for DSH",
-  "version": "0.1.0",
-  "description": "为 LX Music 提供增强控制界面与 LLM 交互能力：侧边栏迷你播放卡片、搜索/播放列表主窗口、音源与音质策略设置窗口、search_and_play 点歌工具",
+  "version": "0.2.1",
+  "description": "为 LX Music 提供增强控制界面与 LLM 交互能力：侧边栏迷你播放卡片（含播放模式切换）、搜索/播放列表主窗口、音源与音质策略设置窗口、细粒度音乐工具集（music_search/play/playlist/prev/next/control）",
   "author": "dsh",
   "license": "MIT",
   "type": "plugin",
@@ -13,7 +13,7 @@
     "client": "lib/client.js"
   },
   "lifecycle": {
-    "apply": "host: apply(ctx, config) —— 注册 PlaybackService(Remote) / search_and_play 工具 / storage 域",
+    "apply": "host: apply(ctx, config) —— 注册 PlaybackService(Remote) / 细粒度音乐工具集（music_search/play/playlist/prev/next/control + 兼容 search_and_play）/ storage 域",
     "clientApply": "client: apply(ctx) —— 注入 sidebar.footer.action 卡片与自绘模态窗口",
     "config": "schemastery z.object，见 src/index.ts 的 Config"
   },
@@ -27,8 +27,32 @@
   },
   "tools": [
     {
+      "name": "music_search",
+      "description": "搜索音乐（不自动播放），可解析直链预览"
+    },
+    {
+      "name": "music_play",
+      "description": "播放音乐：按关键词搜索播放，或播放播放列表指定序号"
+    },
+    {
+      "name": "music_playlist",
+      "description": "播放列表管理：查看/添加/移除/清空/导出"
+    },
+    {
+      "name": "music_prev",
+      "description": "播放上一首（按播放模式）"
+    },
+    {
+      "name": "music_next",
+      "description": "播放下一首（按播放模式）"
+    },
+    {
+      "name": "music_control",
+      "description": "播放控制：播放/暂停、进度、音量、音质、播放模式切换"
+    },
+    {
       "name": "search_and_play",
-      "description": "搜索并播放音乐（LLM 点歌），支持防刷与点歌日志"
+      "description": "（兼容入口）搜索并播放音乐，一步完成点歌"
     }
   ],
   "ui": [

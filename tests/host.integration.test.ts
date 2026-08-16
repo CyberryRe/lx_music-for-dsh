@@ -41,7 +41,7 @@ function fakeStorageDomain() {
 }
 
 describe('host 集成（apply 全流程）', () => {
-  it('apply 注册 PlaybackService（lxPlayback）与 search_and_play 工具', async () => {
+  it('apply 注册 PlaybackService（lxPlayback）与细粒度音乐工具集', async () => {
     const ctx = new Context() as never as Record<string, unknown> & {
       tools: { register(t: unknown): void }
       storageDomain: { open(spec: unknown): Promise<unknown> }
@@ -66,9 +66,11 @@ describe('host 集成（apply 全流程）', () => {
     // 1. 服务注册
     expect(typeof ctx.lxPlayback?.getState).toBe('function')
 
-    // 2. 工具注册
-    expect(tools).toHaveLength(1)
-    expect(tools[0]?.name).toBe('search_and_play')
+    // 2. 工具注册：细粒度工具集（6 个 music_* + 兼容 search_and_play）
+    expect(tools).toHaveLength(7)
+    for (const name of ['music_search', 'music_play', 'music_playlist', 'music_prev', 'music_next', 'music_control', 'search_and_play']) {
+      expect(tools.some((t) => t.name === name)).toBe(true)
+    }
 
     // 3. 播放服务全流程：搜索 → 直链 → 入列 → 播放
     const svc = ctx.lxPlayback!
@@ -88,7 +90,7 @@ describe('host 集成（apply 全流程）', () => {
     expect(Array.isArray(sources)).toBe(true)
   })
 
-  it('工具执行：搜索+直链预览+播放，且限流生效', async () => {
+  it('工具执行：music_play 搜索+直链+播放，且限流生效', async () => {
     const ctx = new Context() as never as Record<string, unknown> & {
       tools: { register(t: unknown): void }
       storageDomain: { open(spec: unknown): Promise<unknown> }
@@ -105,18 +107,28 @@ describe('host 集成（apply 全流程）', () => {
     ctx.logger = console
     await apply(ctx, { providerMode: 'mock', rateLimitPerMinute: 2 })
 
-    const tool = tools[0]!
-    const first = (await tool.execute({ query: '周杰伦', limit: 2 }, {})) as {
-      results: Array<{ name: string; url: string }>
+    const findTool = (name: string): ToolLike => {
+      const tool = tools.find((t) => t.name === name)
+      if (!tool) throw new Error(`tool ${name} 未注册`)
+      return tool
+    }
+
+    // music_play：搜索 + 直链 + 加入列表 + 播放
+    const first = (await findTool('music_play').execute({ query: '周杰伦', limit: 2 }, {})) as {
       played: boolean
+      playlistCount: number
+      current: { name: string } | null
     }
     expect(first.played).toBe(true)
-    expect(first.results.length).toBe(2)
-    expect(first.results.every((r) => r.url.length > 0)).toBe(true) // 直链预览全部就绪
+    expect(first.current?.name).toBe('晴天')
+    expect(first.playlistCount).toBe(1)
 
-    // 限流：第 3 次调用被拒
-    await tool.execute({ query: '朴树', limit: 1 }, {})
-    await expect(tool.execute({ query: 'Beyond', limit: 1 }, {})).rejects.toThrow(/点歌过于频繁/)
+    // music_search：仅搜索不播放
+    const search = (await findTool('music_search').execute({ query: '朴树', limit: 2 }, {})) as { results: unknown[] }
+    expect(search.results.length).toBe(2)
+
+    // 限流：搜索类操作第 3 次被拒（2 次/分钟）
+    await expect(findTool('music_search').execute({ query: 'Beyond', limit: 1 }, {})).rejects.toThrow(/操作过于频繁/)
   })
 
   it('无 storageDomain 时仅内存运行', async () => {

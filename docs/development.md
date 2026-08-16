@@ -22,8 +22,8 @@ lx_plugin/
 │   └── link-dsh.mjs         # 从全局 DSH 安装树镜像 @deepseek-ai/* 运行时包
 ├── src/
 │   ├── index.ts             # host 入口：Config / apply / storage domain
-│   ├── playback.ts          # PlaybackService（Typert Remote：播放权威状态）
-│   ├── tools.ts             # search_and_play LLM 工具（防刷 + 日志）
+│   ├── playback.ts          # PlaybackService（Typert Remote：播放权威状态，含播放模式）
+│   ├── tools.ts             # LLM 音乐工具集（music_search/play/playlist/prev/next/control + 兼容 search_and_play）
 │   ├── lxclient.ts          # lxserver HTTP 客户端（可选，超时 10s / 重试 2 次）
 │   ├── provider.ts          # Provider 门面（engine / lxserver / mock 切换）
 │   ├── mock.ts              # 内置 mock 音源（演示/测试）
@@ -39,8 +39,8 @@ lx_plugin/
 │   │   └── {kw,kg,tx,wy,mg}/ #   各平台搜索模块（原样移植 + import 适配）
 │   ├── shared/types.ts      # host/client 共享类型与默认设置
 │   ├── client.ts            # client 入口：sidebar.footer.action 卡片 + 窗口桥
-│   └── ui/                  # React 组件（Card / MainWindow / SettingsWindow / Modal / store）
-├── tests/                   # 单元测试（node:test + mini 断言层，共 90 例）
+│   └── ui/                  # React 组件（Card / MainWindow / SettingsWindow / Modal / store / playModes）
+├── tests/                   # 单元测试（node:test + mini 断言层）
 └── docs/
     └── development.md       # 本文档
 ```
@@ -105,7 +105,7 @@ npm run build
 # 产物：
 #   lib/index.js    host 插件（ESM，external：@deepseek-ai/*、zod、schemastery）
 #   lib/client.js   浏览器 bundle（window.__ModuleLoader__.load 包装，external：react 等 kernel 模块）
-npm run pack        # 生成 lx-music-for-dsh-0.1.8.tgz
+npm run pack        # 生成 lx-music-for-dsh-0.2.1.tgz
 ```
 
 ## 6. 安装到 DSH（web 模式）
@@ -114,7 +114,7 @@ npm run pack        # 生成 lx-music-for-dsh-0.1.8.tgz
 
 ```bash
 cd %USERPROFILE%\.dsh\profiles\web
-pnpm add D:\deepseek_harness\lx_plugin\lx-music-for-dsh-0.1.8.tgz
+pnpm add D:\deepseek_harness\lx_plugin\lx-music-for-dsh-0.2.1.tgz
 # 或 dsh plugin --profile web add <tgz 路径>
 ```
 
@@ -135,8 +135,9 @@ pnpm add D:\deepseek_harness\lx_plugin\lx-music-for-dsh-0.1.8.tgz
 ```
 
 重启 `dsh web`，刷新浏览器：
-- 侧边栏底部「设置」按钮上方出现 LX Music 迷你卡片；
-- 模型工具列表中应包含 `search_and_play`。
+- 侧边栏底部「设置」按钮上方出现 LX Music 迷你卡片（含播放模式切换按钮）；
+- 模型工具列表中应包含细粒度音乐工具集：`music_search` / `music_play` / `music_playlist` /
+  `music_prev` / `music_next` / `music_control`（以及兼容入口 `search_and_play`）。
 
 ### 6.2 开发期安装（本地路径）
 
@@ -179,18 +180,18 @@ v2.12.2 保持一致：100% 由音源脚本提供。
 
 ```bash
 npm test
-# 覆盖（90 例）：
+# 覆盖：
 #   ratelimit     滑动窗口限流（允许/拒绝/滑动/重置/边界）
 #   lxclient      超时重试、平台优先级搜索编排、直链请求体、音源 CRUD 与自动启用
 #   mock          mock 搜索（关键词/歌手/平台/去重/limit）与直链
-#   playback      播放控制、列表管理（队尾/下一首/删除/清空/拖拽排序/导出）、设置持久化、
-#                 音质选择（最高音质/默认/显式/回退）、直链降级
-#   tools         search_and_play：搜索→直链预览→入列→播放、auto_play=false、
-#                 指定平台、防刷（超限拒绝/窗口恢复）、点歌日志、输出渲染
+#   playback      播放控制（含播放模式：列表循环/单曲循环/顺序播放/随机播放）、列表管理（队尾/下一首/删除/清空/拖拽排序/导出）、
+#                 设置持久化、音质选择（最高音质/默认/显式/回退）、直链降级
+#   tools         细粒度音乐工具集（7 个）：music_search/play/playlist/prev/next/control、
+#                 兼容 search_and_play、防刷（超限拒绝/窗口恢复）、点歌日志（action 字段）、输出渲染
 #   provider      provider 选择逻辑与 mock 音源管理全流程
 #   engine        音源脚本沙箱（加载/调用/超时/错误/工具函数）、引擎调度（轮询/降级/排序）、
 #                 音源管理（上传/启停/删除/校验）、本地持久化、SDK 结果规范化
-#   host.integration  apply 全流程（服务注册/工具注册/搜索→直链→播放/限流）
+#   host.integration  apply 全流程（服务注册/工具集注册/搜索→直链→播放/限流）
 ```
 
 可选真实网络冒烟（五平台搜索，需外网）：
@@ -206,8 +207,11 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js
-- [ ] `npm test` 90/90 通过
+- [ ] `npm test` 全部通过
 - [ ] 安装到 web profile 后侧边栏出现卡片，按钮/进度条实时生效
-- [ ] LLM 可调用 search_and_play（含防刷与日志）
+- [ ] 卡片播放列表弹层与主窗口播放列表页可切换四种播放模式（列表循环/单曲循环/随机/顺序），
+      单曲循环播完自动重播、顺序播放到末尾停止、随机播放不重复当前曲目
+- [ ] LLM 可调用细粒度音乐工具集（music_search/music_play/music_playlist/music_prev/music_next/music_control，
+      含防刷与 action 日志）
 - [ ] 无 lxserver 时内置引擎全功能可用（搜索开箱即用；导入音源脚本后直链解析正常）；
       配置 lxserver 后搜索/直链/音源管理走真实服务

@@ -6,7 +6,7 @@ import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { PlaybackService, adaptDomain } from './playback'
-import { registerSearchAndPlayTool } from './tools'
+import { registerMusicTools } from './tools'
 import { SlidingWindowRateLimiter } from './ratelimit'
 import { DEFAULT_SETTINGS, type PluginSettings } from './shared/types'
 
@@ -47,6 +47,7 @@ const domainSpec = defineDomain({
     logs: domainTable(
       zod.object({
         time: zod.string(),
+        action: zod.string().optional(),
         query: zod.string(),
         limit: zod.number(),
         autoPlay: zod.boolean(),
@@ -136,8 +137,8 @@ export async function apply(ctx: {
     },
   })
 
-  // LLM 点歌工具
-  registerSearchAndPlayTool(ctx, { service })
+  // LLM 音乐工具集（细粒度：搜索/播放/播放列表/上下首/控制 + 兼容 search_and_play）
+  registerMusicTools(ctx, { service })
 
   logger.warn('[lx-music-for-dsh] 插件已加载，provider:', service.getProviderMode())
 }

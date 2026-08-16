@@ -186,6 +186,92 @@ describe('PlaybackService 设置与持久化', () => {
   })
 })
 
+describe('PlaybackService 播放模式（playMode）', () => {
+  function seeded() {
+    const h = makeService()
+    h.service.addMusic([song({ id: 'a', name: 'A' }), song({ id: 'b', name: 'B' }), song({ id: 'c', name: 'C' })], 'tail')
+    h.service.play({ index: 0 })
+    return h
+  }
+
+  it('默认列表循环，setPlayMode 校验并持久化', async () => {
+    const { service } = makeService()
+    expect(service.getState().playMode).toBe('list')
+    service.setPlayMode('shuffle')
+    expect(service.getState().playMode).toBe('shuffle')
+    expect(() => service.setPlayMode('bogus' as never)).toThrow(/未知播放模式/)
+  })
+
+  it('列表循环：next 到末尾回到第一首', () => {
+    const { service } = seeded()
+    service.play({ index: 2 })
+    expect(service.next().currentIndex).toBe(0)
+  })
+
+  it('单曲循环：手动 next 同样前进（单曲重播由 client ended 处理）', () => {
+    const { service } = seeded()
+    service.setPlayMode('single')
+    service.play({ index: 1 })
+    expect(service.next().currentIndex).toBe(2)
+  })
+
+  it('顺序播放：next 到末尾停止（保持当前曲目）', () => {
+    const { service } = seeded()
+    service.setPlayMode('order')
+    service.play({ index: 1 })
+    expect(service.next().currentIndex).toBe(2)
+    const st = service.next()
+    expect(st.currentIndex).toBe(2)
+    expect(st.status).toBe('stoped')
+    expect(st.progress).toBe(st.duration)
+    // 再次 next 仍停在末尾
+    expect(service.next().status).toBe('stoped')
+  })
+
+  it('顺序播放：prev 到开头后重播第一首', () => {
+    const { service } = seeded()
+    service.setPlayMode('order')
+    service.play({ index: 1 })
+    expect(service.prev().currentIndex).toBe(0)
+    expect(service.prev().currentIndex).toBe(0)
+  })
+
+  it('随机播放：next 不重复当前曲目', () => {
+    const { service } = seeded()
+    service.setPlayMode('shuffle')
+    for (let i = 0; i < 10; i++) {
+      const before = service.getState().currentIndex
+      const st = service.next()
+      expect(st.currentIndex).not.toBe(before)
+    }
+  })
+
+  it('随机播放：单曲列表时重播当前', () => {
+    const { service } = makeService()
+    service.addMusic([song()], 'tail')
+    service.play({ index: 0 })
+    service.setPlayMode('shuffle')
+    expect(service.next().currentIndex).toBe(0)
+  })
+
+  it('playMode 持久化：重启后恢复', async () => {
+    const storage = memStorage()
+    const first = new PlaybackService(new Context(), { storage, settings: { ...DEFAULT_SETTINGS, providerMode: 'mock' } })
+    first.setPlayMode('order')
+    await new Promise((r) => setTimeout(r, 400))
+    const second = new PlaybackService(new Context(), { storage, settings: { ...DEFAULT_SETTINGS, providerMode: 'mock' } })
+    expect(second.getState().playMode).toBe('order')
+  })
+
+  it('旧持久化数据无 playMode 时回退 list', async () => {
+    const storage = memStorage()
+    // 直接写入旧版本格式数据（无 playMode 字段）
+    await storage.global.set({ playlist: [song()], currentIndex: 0, quality: '320k', volume: 1, mute: false })
+    const second = new PlaybackService(new Context(), { storage, settings: { ...DEFAULT_SETTINGS, providerMode: 'mock' } })
+    expect(second.getState().playMode).toBe('list')
+  })
+})
+
 describe('pickQuality 音质选择', () => {
   const settings = { ...DEFAULT_SETTINGS, providerMode: 'mock' } as PluginSettings
 
