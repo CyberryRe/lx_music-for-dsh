@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from './mini'
 import { Context } from '@deepseek-ai/cordis'
-import { apply } from '../src/index'
+import { apply, domainSpec } from '../src/index'
 import type { MusicInfo, PlayerState, PluginSettings } from '../src/shared/types'
 
 interface ToolLike {
@@ -144,5 +144,44 @@ describe('host 集成（apply 全流程）', () => {
     const svc = ctx.lxPlayback!
     svc.addMusic([{ id: 'x', name: 'X', singer: 'Y', source: 'wy', interval: '01:00', meta: { songId: 'x' } }], 'tail')
     expect(svc.getState().playlist).toHaveLength(1)
+  })
+})
+
+// storage domain 的 schema 是**持久层读边界校验**：任一条存储记录不匹配，整个 domain
+// 的 open 就以 invalid-record 失败，插件静默降级为内存存储（播放列表/设置/音源不落盘）。
+// 因此每个 schema 必须与代码实际写入的形状逐字段一致 —— 这两条是本项目真实踩过的坑。
+describe('storage domain schema 与写入形状一致', () => {
+  it('source_order 的记录是裸 string[]（engine/sourceStore.ts 的写入形状）', () => {
+    const schema = domainSpec.tables.source_order.valueSchema
+    // 实际写入：orderTable.put('order', ['a.js'])
+    expect(schema.safeParse(['a.js', 'b.js']).success).toBe(true)
+    // 早期错误的 schema 形状：对象包裹（会让旧数据导致 open 失败）
+    expect(schema.safeParse({ order: ['a.js'] }).success).toBe(false)
+  })
+
+  it('global 保留 playMode（zod 默认丢弃未声明键，漏声明等于播放模式永不持久化）', () => {
+    const schema = domainSpec.global.schema
+    const parsed = schema.parse({
+      playlist: [],
+      currentIndex: -1,
+      quality: '320k',
+      volume: 1,
+      mute: false,
+      playMode: 'single',
+    }) as { playMode?: string }
+    expect(parsed.playMode).toBe('single')
+  })
+
+  it('sources 记录与 SourceRecord 字段一致', () => {
+    const schema = domainSpec.tables.sources.valueSchema
+    const ok = schema.safeParse({
+      id: 'a.js',
+      name: 'A',
+      script: '/* x */',
+      enabled: true,
+      createdAt: '2026-08-15T00:00:00.000Z',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    })
+    expect(ok.success).toBe(true)
   })
 })

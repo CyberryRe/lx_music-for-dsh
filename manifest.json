@@ -2,15 +2,19 @@
   "$schema": "./docs/manifest.schema.json",
   "id": "lx-music-for-dsh",
   "name": "LX Music for DSH",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "为 LX Music 提供增强控制界面与 LLM 交互能力：侧边栏迷你播放卡片（含播放模式切换）、搜索/播放列表主窗口、音源与音质策略设置窗口、细粒度音乐工具集（music_search/play/playlist/prev/next/control）",
   "author": "dsh",
   "license": "Apache-2.0",
   "type": "plugin",
   "target": "web",
+  "requires": {
+    "dsh": ">=0.1.5-rc.1"
+  },
   "entry": {
     "host": "lib/index.js",
-    "client": "lib/client.js"
+    "client": "lib/client.js",
+    "layer": "cordis.patch.yml"
   },
   "lifecycle": {
     "apply": "host: apply(ctx, config) —— 注册 PlaybackService(Remote) / 细粒度音乐工具集（music_search/play/playlist/prev/next/control + 兼容 search_and_play）/ storage 域",
@@ -73,6 +77,10 @@
     "rateLimitPerMinute": "LLM 点歌每分钟调用上限"
   },
   "install": {
-    "method": "npm 包安装到 profile + cordis.patch.yml 注册行，详见 docs/development.md"
+    "method": "node scripts/install-to-dsh.mjs —— npm pack + `dsh plugin --profile web add <tgz>`；包声明 dsh.bundle.patch，作为 profile 组合层自动激活（dsh >= 0.1.5-rc.1）。详见 docs/development.md §6"
+  },
+  "compatibility": {
+    "dsh": "@deepseek-ai/dsh 0.1.5-rc.1（运行时镜像包 0.1.5-rc.2）",
+    "previous": "1.0.0 面向 0.1.0-rc.6，需要手工在 profile cordis.patch.yml 写 insert 行；升级到 1.0.1 时必须删除该旧行，否则 duplicate loader entry id: lx-music"
   }
 }

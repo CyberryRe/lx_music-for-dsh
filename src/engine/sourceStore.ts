@@ -63,7 +63,15 @@ export class DomainSourceStore implements SourceStoreFace {
   private readonly orderTable: ReturnType<StorageFace['table']>
   private readonly memory = new MemorySourceStore()
 
-  constructor(storage: StorageFace) {
+  /**
+   * @param storage - storage domain 门面。
+   * @param options.legacyFile - 旧版文件存储路径（`$DSH_HOME/storages/lx-music-sources.json`）。
+   *   1.0.0 的 domain schema 与实际写入形状不一致，storage domain 每次 open 都以
+   *   `invalid-record` 失败并降级到该文件；1.0.1 修好 schema 后，domain 里的音源快照会比
+   *   文件里的旧。传入此路径做一次性合并（缺失或更新的记录才写入），避免修 bug 反而让
+   *   用户当前在用的音源消失。
+   */
+  constructor(storage: StorageFace, options: { legacyFile?: string } = {}) {
     this.sourceTable = storage.table('sources')
     this.orderTable = storage.table('source_order')
     // 启动时从持久层装载到内存
@@ -75,6 +83,58 @@ export class DomainSourceStore implements SourceStoreFace {
     }
     const order = this.orderTable.get('order') as string[] | undefined
     if (Array.isArray(order) && order.length > 0) void this.memory.setOrder(order)
+    if (options.legacyFile) this.mergeLegacyFile(options.legacyFile)
+  }
+
+  /**
+   * 一次性合并旧版文件存储：只在 domain 里没有该 id、或文件里的 `updatedAt` 更新时写入；
+   * 合并后把文件改名（`.migrated-<时间戳>`）作为"已迁移"标记 —— 否则用户删掉的音源会在
+   * 下次启动时被旧文件复活。写入失败只告警，不影响启动。
+   *
+   * 内存部分的合并**同步**完成（`MemorySourceStore` 的方法体没有 await），因为
+   * `EngineProvider` 构造函数紧接着就 `void this.reload()` 读 `store.list()`；若把内存
+   * 合并也推到微任务里，首次加载会漏掉刚迁移过来的音源脚本。落盘与改名异步收尾。
+   * @param file - 旧版文件存储的绝对路径。
+   */
+  private mergeLegacyFile(file: string): void {
+    if (!existsSync(file)) return
+    let data: { records?: SourceRecord[]; order?: string[] }
+    try {
+      data = JSON.parse(readFileSync(file, 'utf8')) as { records?: SourceRecord[]; order?: string[] }
+    } catch {
+      return
+    }
+    const records = Array.isArray(data.records) ? data.records : []
+    if (records.length === 0) return
+    const adopted: string[] = []
+    const writes: Promise<unknown>[] = []
+    for (const record of records) {
+      if (!record || typeof record.id !== 'string') continue
+      const existing = this.memory.get(record.id)
+      const ours = String(existing?.updatedAt ?? '')
+      const theirs = String(record.updatedAt ?? '')
+      if (existing !== undefined && ours >= theirs) continue
+      void this.memory.put(record)
+      writes.push(this.sourceTable.put(record.id, record).catch(() => undefined))
+      adopted.push(record.id)
+    }
+    if (adopted.length > 0) {
+      const fileOrder = (Array.isArray(data.order) ? data.order : []).filter((id) => this.memory.get(id) !== undefined)
+      const known = new Set(this.memory.order())
+      const next = [...fileOrder, ...this.memory.order()].filter((id, index, all) => known.has(id) && all.indexOf(id) === index)
+      void this.memory.setOrder(next)
+      writes.push(this.orderTable.put('order', this.memory.order()).catch(() => undefined))
+      console.warn(`[lx-music] 已从文件存储合并 ${String(adopted.length)} 个音源到 storage domain: ${adopted.join(', ')}`)
+    }
+    void Promise.all(writes)
+      .then(() => {
+        try {
+          renameSync(file, `${file}.migrated-${String(Date.now())}`)
+        } catch (err) {
+          console.warn('[lx-music] 迁移标记写入失败（下次启动会重新合并一次）:', err)
+        }
+      })
+      .catch((err: unknown) => console.warn('[lx-music] 旧文件存储迁移失败:', err))
   }
 
   list(): SourceRecord[] {
@@ -172,7 +232,7 @@ export class FileSourceStore implements SourceStoreFace {
   }
 }
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { StorageFace } from '../playback'

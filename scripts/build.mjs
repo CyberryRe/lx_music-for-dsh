@@ -2,7 +2,7 @@
 // Uses rollup (pure JS — no native spawn), which works in restricted sandboxes.
 // - host: ESM, externals = all @deepseek-ai/* + zod + schemastery (provided by the DSH runtime)
 // - client: CJS wrapped in `window.__ModuleLoader__.load({ id, factory })`; externals = the DSH
-//   browser kernel module table (react, @deepseek-ai/dsh-client-ui-primitives, ...).
+//   browser kernel's PLATFORM_MODULES baseline (react / cordis / client-ui-slots / ...).
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,21 +15,26 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const pkgName = pkg.name
 
 const HOST_EXTERNALS = [/^@deepseek-ai\//, /^zod$/, /^schemastery$/, /^node:/]
-const CLIENT_EXTERNALS = [
+// @deepseek-ai/dsh 0.1.5-rc.1 的客户端「静态模块表」（dsh-web-frontend 启动时
+// 用 by() 冻结并交给 ClientModuleSystem 作为 staticModules 种子）。这张表里的
+// 模块由 shell 提供同一份实例，插件 bundle 必须 require 而不是打包进来，否则会
+// 出现两份 React / cordis / 插槽注册表。
+// 非基线模块（不属于这张表的）要写进 package.json 的 dsh.client.external，
+// 由它命名的插件行提供；本插件目前只用基线模块，因此不声明 external。
+const PLATFORM_MODULES = [
   'react',
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
+  '@deepseek-ai/dsh-client-ui-dockkit',
 ]
 
 const isHostExternal = (id) => HOST_EXTERNALS.some((re) => re.test(id))
-const isClientExternal = (id) => CLIENT_EXTERNALS.includes(id)
+const isClientExternal = (id) => PLATFORM_MODULES.includes(id)
 
 // host bundle 是 ESM，没有 __dirname；banner 注入之（sandbox.ts 用它定位 runner）。
 // 注意：导入名需加前缀，避免与 bundle 内其余 node:path 导入（dirname 等）重名冲突。

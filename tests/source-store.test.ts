@@ -3,8 +3,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs'
-import { FileSourceStore, type SourceRecord } from '../src/engine/sourceStore'
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs'
+import { DomainSourceStore, FileSourceStore, type SourceRecord } from '../src/engine/sourceStore'
+import type { StorageFace } from '../src/playback'
 
 function record(id: string, name: string): SourceRecord {
   return { id, name, script: `/* @name ${name} */ lx.send('inited', { sources: {} })`, enabled: true, createdAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z' }
@@ -55,4 +56,71 @@ test('文件内容为合法 JSON（原子写产物）', async () => {
   // 无残留 tmp 文件
   const leftovers = readdirSync(dir).filter((f) => f.endsWith('.tmp'))
   assert.deepEqual(leftovers, [])
+})
+
+// ── DomainSourceStore：1.0.0 → 1.0.1 的一次性文件合并迁移 ──────────────────────
+// 背景：1.0.0 的 storage domain schema 有缺陷（source_order 声明为对象、实际写入裸数组），
+// `open` 每次都因 invalid-record 失败并降级到 FileSourceStore。修好 schema 后，domain 里的
+// 音源快照比文件旧；如果直接切换，用户当前在用的音源会"消失"。因此 DomainSourceStore
+// 构造时会做一次性合并（缺失或 updatedAt 更新的记录才写入），并把文件改名标记已迁移。
+
+/** 最小 storage domain 门面（内存实现），记录调用以便断言写回。 */
+function fakeStorage(): StorageFace & { globalValue: { current: unknown }; tables: Map<string, Map<string, unknown>> } {
+  const tables = new Map<string, Map<string, unknown>>()
+  const state = { current: undefined as unknown }
+  return {
+    globalValue: { get current() { return state.current }, set current(v: unknown) { state.current = v } },
+    tables,
+    global: {
+      get: () => state.current,
+      set: async (v: unknown) => { state.current = v },
+    },
+    table: (name: string) => {
+      if (!tables.has(name)) tables.set(name, new Map())
+      const t = tables.get(name)!
+      return {
+        get: (k: string) => t.get(k),
+        put: async (k: string, v: unknown) => { t.set(k, v) },
+        entries: () => t.entries(),
+        delete: async (k: string) => t.delete(k),
+      }
+    },
+  }
+}
+
+test('DomainSourceStore：把旧文件存储里的音源合并进 domain（不丢当前在用的音源）', async () => {
+  const legacy = join(dir, 'legacy-sources.json')
+  writeFileSync(legacy, JSON.stringify({
+    records: [
+      // domain 里没有 → 必须被采纳
+      { ...record('xinghai.js', '星海音乐源'), updatedAt: '2026-08-16T06:03:12.391Z' },
+      // domain 里已有且更新 → 保留 domain 版本
+      { ...record('old.js', '文件里的旧记录'), updatedAt: '2026-01-01T00:00:00.000Z' },
+    ],
+    order: ['xinghai.js', 'old.js'],
+  }), 'utf8')
+
+  const storage = fakeStorage()
+  await storage.table('sources').put('old.js', { ...record('old.js', 'domain 里的新记录'), updatedAt: '2026-09-01T00:00:00.000Z' })
+
+  const store = new DomainSourceStore(storage, { legacyFile: legacy })
+  // 合并是异步的（构造函数不能 await）：等待写入链落地
+  await new Promise((r) => setTimeout(r, 50))
+
+  assert.equal(store.get('xinghai.js')?.name, '星海音乐源')
+  assert.equal(store.get('old.js')?.name, 'domain 里的新记录')
+  assert.equal(storage.tables.get('sources')?.get('xinghai.js') !== undefined, true)
+  // 顺序合并后 xinghai 在 old 之前
+  assert.deepEqual(store.order(), ['xinghai.js', 'old.js'])
+  // 已迁移标记：文件被改名，避免用户删除音源后被旧文件复活
+  assert.equal(existsSync(legacy), false)
+  assert.equal(readdirSync(dir).some((f) => f.startsWith('legacy-sources.json.migrated-')), true)
+})
+
+test('DomainSourceStore：不传 legacyFile 时不做任何合并', async () => {
+  const storage = fakeStorage()
+  await storage.table('sources').put('a.js', record('a.js', 'A'))
+  const store = new DomainSourceStore(storage)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(store.list().map((r) => r.id), ['a.js'])
 })

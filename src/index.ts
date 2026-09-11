@@ -27,9 +27,20 @@ export const Config = z.object({
 })
 
 const qualityEnum = zod.enum(['128k', '320k', 'flac', 'flac24bit', 'flac32bit', 'wav'])
+const playModeEnum = zod.enum(['list', 'single', 'order', 'shuffle'])
 
-/** storage domain：播放状态 global + 点歌日志表 + 音源脚本表。 */
-const domainSpec = defineDomain({
+/**
+ * storage domain：播放状态 global + 点歌日志表 + 音源脚本表 + 音源顺序表。
+ *
+ * 注意：这些 schema 是**持久层的读边界校验**（`DomainSpec` 文档：每个存储记录在
+ * durable 边界被校验，任一条不匹配会让整个 `open` 以 `invalid-record` 失败）。
+ * 因此每个 schema 必须与代码实际写入的形状**逐字段**一致，否则插件会静默降级为
+ * 内存存储（播放列表/设置/音源全部不落盘）。两条历史教训：
+ *   - `source_order` 的代码（engine/sourceStore.ts）往键 `order` 写的是**裸 string[]**，
+ *     早期 schema 却声明为 `{ order: string[] }` 对象 → 旧数据直接让 open 失败；
+ *   - `global` 早期漏声明 `playMode`，而 zod 对象默认丢弃未声明键 → 播放模式永远读不回来。
+ */
+export const domainSpec = defineDomain({
   name: 'lx_music',
   version: 1,
   global: {
@@ -39,6 +50,7 @@ const domainSpec = defineDomain({
       quality: qualityEnum,
       volume: zod.number(),
       mute: zod.boolean(),
+      playMode: playModeEnum.optional(),
       settings: zod.unknown().optional(),
     }),
     initial: { playlist: [], currentIndex: -1, quality: '320k' as const, volume: 1, mute: false },
@@ -75,11 +87,8 @@ const domainSpec = defineDomain({
         lastError: zod.string().optional(),
       }),
     ),
-    source_order: domainTable(
-      zod.object({
-        order: zod.array(zod.string()),
-      }),
-    ),
+    // 记录形状 = 裸 id 数组（键固定为 'order'，见 engine/sourceStore.ts）。
+    source_order: domainTable(zod.array(zod.string())),
   },
 })
 
@@ -113,8 +122,13 @@ export async function apply(ctx: {
       const domain = (await ctx.storageDomain.open(domainSpec)) as Parameters<typeof adaptDomain>[0]
       storage = adaptDomain(domain)
     } catch (err) {
+      // 双写：ctx.logger 由宿主决定去向（可能被日志级别吞掉），console 保证终端可见。
+      // 这条降级是静默的（UI 仍然可用，只是状态不落盘），必须显式告警。
       logger.warn('[lx-music-for-dsh] storage domain 打开失败，使用内存存储:', err)
+      console.error('[lx-music-for-dsh] storage domain 打开失败，本次运行播放列表/设置不会持久化:', err)
     }
+  } else {
+    console.error('[lx-music-for-dsh] storageDomain 服务不可用，本次运行播放列表/设置不会持久化')
   }
 
   // 播放服务（Typert Remote：lxPlayback）
@@ -144,5 +158,9 @@ export async function apply(ctx: {
   const disposeHook = (ctx as { on?: (event: string, fn: () => void) => void }).on
   disposeHook?.('dispose', () => service.disposeProvider())
 
-  logger.warn('[lx-music-for-dsh] 插件已加载，provider:', service.getProviderMode())
+  // ctx.logger 的去向由宿主决定（可能被日志级别过滤），启动行同时写 stdout，
+  // 便于按 docs/development.md §4.1 在启动 dsh 的终端直接确认插件是否加载。
+  const status = `[lx-music-for-dsh] 插件已加载，provider: ${service.getProviderMode()}，storage: ${storage ? 'durable' : 'memory'}`
+  logger.warn(status)
+  console.info(status)
 }

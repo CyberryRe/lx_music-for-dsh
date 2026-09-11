@@ -35,6 +35,12 @@ export interface EngineOptions {
   storage?: { table(name: string): { get(k: string): unknown; put(k: string, v: unknown): Promise<void>; entries(): IterableIterator<[string, unknown]>; delete(k: string): Promise<boolean> } }
   /** 音源持久化文件路径（不依赖 storage domain 时使用）。 */
   sourceFile?: string
+  /**
+   * storage domain 可用时，是否把旧文件存储（`$DSH_HOME/storages/lx-music-sources.json`）
+   * 一次性合并进 domain。默认关闭：这是**会写盘（含改名）**的迁移，只有真正的运行入口
+   * （provider.ts 的 createProvider）才应打开；测试与嵌入方默认不触碰用户真实数据。
+   */
+  migrateLegacySourceFile?: boolean
 }
 
 /** 默认音源持久化文件：$DSH_HOME/storages/lx-music-sources.json。 */
@@ -51,10 +57,15 @@ export class EngineProvider implements Provider {
 
   constructor(options: EngineOptions = {}) {
     // 持久化优先级：显式文件 → storage domain → 默认文件（保证音源重启不丢）
+    // migrateLegacySourceFile 由运行入口显式打开：1.0.0 的 domain schema 有缺陷导致
+    // storage 一直降级到该文件，domain 里留下的是更旧的音源快照，需要一次性合并回来。
+    // 默认关闭，避免测试/嵌入方在用户真实 $DSH_HOME 上产生写盘副作用。
     this.store = options.sourceFile
       ? new FileSourceStore(options.sourceFile)
       : options.storage
-        ? new DomainSourceStore(options.storage as never)
+        ? new DomainSourceStore(options.storage as never, {
+            legacyFile: options.migrateLegacySourceFile === true ? defaultSourceFile() : undefined,
+          })
         : new FileSourceStore(defaultSourceFile())
     void this.reload()
   }

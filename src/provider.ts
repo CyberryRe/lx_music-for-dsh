@@ -170,7 +170,9 @@ export function migrateMockMode(value: unknown): ProviderMode {
 /** 按设置选择 provider。 */
 export function createProvider(settings: ProviderSelection, deps: { storage?: StorageFace } = {}): Provider {
   const mode = migrateMockMode(settings.providerMode)
-  if (mode === 'engine') return new EngineProvider({ storage: deps.storage })
+  // 运行入口（唯一）：storage domain 可用时顺带做一次旧文件存储合并迁移。
+  const engine = (): Provider => new EngineProvider({ storage: deps.storage, migrateLegacySourceFile: true })
+  if (mode === 'engine') return engine()
   if (mode === 'mock') return new MockSourceFacade(new MockProvider())
   if (mode === 'lxserver') {
     if (!settings.lxServerUrl) throw new Error('providerMode 为 lxserver 但未配置 lxServerUrl')
@@ -178,5 +180,5 @@ export function createProvider(settings: ProviderSelection, deps: { storage?: St
   }
   // auto
   if (settings.lxServerUrl) return new LxProviderFacade(new LxClient({ baseUrl: settings.lxServerUrl }))
-  return new EngineProvider({ storage: deps.storage })
+  return engine()
 }

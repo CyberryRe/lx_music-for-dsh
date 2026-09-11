@@ -19,6 +19,10 @@ Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
   （播放列表管理）/ `music_prev` / `music_next` / `music_control`（暂停、音量、音质、播放模式等），
   另保留兼容入口 `search_and_play`（一步点歌）；内置滑动窗口防刷（默认 6 次/分钟）与带 action 的操作日志。
 
+> 状态持久化（播放列表/音量/音质/播放模式/点歌日志/音源脚本）走 DSH storage domain
+> （`$DSH_HOME/storages/lx_music.json`）；storage domain 不可用时降级为内存 + 音源文件兜底，
+> 并在启动日志与 stderr 明确告警。
+
 ## 架构
 
 - **完全独立**：搜索由**内置音乐 SDK** 提供（移植自 lx-music-desktop，酷我/酷狗/QQ音乐/网易云/咪咕
@@ -42,13 +46,27 @@ Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
 ## 快速开始
 
 ```bash
-npm install && node scripts/link-dsh.mjs
+npm install && node scripts/link-dsh.mjs   # 镜像全局 DSH 运行时（版本不一致会自动刷新）
 npm run lint && npm run typecheck && npm run build && npm test
 # 可选：真实网络冒烟（五平台搜索）
 node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 ```
 
-安装到 DSH：见 [docs/development.md](docs/development.md)（§6）。
+安装到 DSH（要求 `@deepseek-ai/dsh` ≥ 0.1.5-rc.1）：
+
+```bash
+node scripts/install-to-dsh.mjs            # 打包 + dsh plugin add + 旧版残留迁移校验
+# 然后重启 dsh web 并刷新浏览器
+```
+
+插件包用 `dsh.bundle.patch` 声明为 profile 组合层，`dsh plugin add` 会自动激活，
+无需手工编辑 profile 的 `cordis.patch.yml`。详见 [docs/development.md](docs/development.md)（§6）。
+
+端到端验证（真实浏览器，需要本机有 Chrome/Edge）：
+
+```bash
+node scripts/browser-smoke.mjs "http://127.0.0.1:3099/?token=<token>"
+```
 
 ## 直链解析失败排查
 
@@ -74,9 +92,32 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 ## 目录
 
 ```
-manifest.json  插件清单
-src/index.ts   host 入口
-src/client.ts  client 入口
-src/ui/        React 组件
-tests/         单元测试（117 例）
+package.json      npm 包 + dsh.bundle / dsh.client 声明
+cordis.patch.yml  组合层 patch（dsh plugin add 后自动生效的插件行）
+manifest.json     插件清单（元数据：入口、生命周期、工具、配置项）
+src/index.ts      host 入口
+src/client.ts     client 入口
+src/ui/           React 组件
+tests/            单元测试（127 例）
+docs/             开发文档 / DSH 与 LX Music 研读笔记
 ```
+
+## 版本兼容性
+
+| 插件版本 | DSH 版本 |
+|---|---|
+| 1.0.1 | `@deepseek-ai/dsh@0.1.5-rc.1`（`dsh.bundle` 组合层，一条命令安装） |
+| 1.0.0 | `@deepseek-ai/dsh@0.1.0-rc.6`（需手工写 profile patch 行） |
+
+从 1.0.0 升级要处理两件事（第 2 件自动完成）：
+
+1. 删掉 profile `cordis.patch.yml` 里手工 `insert` 的 `id: lx-music` 行
+   （或用 `scripts/install-to-dsh.mjs` 自动迁移并备份），否则同一 id 会让 dsh 启动失败
+   （`duplicate loader entry id: lx-music`）。
+2. 1.0.1 修好了 storage domain 的 schema：1.0.0 里它每次 `open` 都失败，插件静默降级为内存存储
+   —— 播放列表/设置/播放模式/日志都不落盘。修好后 domain 里的音源快照会比旧版兜底文件
+   `$DSH_HOME/storages/lx-music-sources.json` 更旧，插件会自动做一次非破坏性合并，并把该文件
+   改名为 `.migrated-<时间戳>`。
+
+启动日志确认状态：`[lx-music-for-dsh] 插件已加载，provider: engine，storage: durable`
+（`storage: memory` 表示持久化不可用）。细节见 [docs/development.md](docs/development.md) §10。

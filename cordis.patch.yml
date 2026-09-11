@@ -1,0 +1,34 @@
+# lx-music-for-dsh 的组合层 patch（dsh.bundle.patch）。
+#
+# 从 @deepseek-ai/dsh 0.1.5-rc.1 起，插件包只要在 package.json 里声明
+# `dsh.bundle.patch`，`dsh plugin --profile <name> add <包名|tgz>` 就会把这个包
+# 追加到 profile 的 `dsh.profile.bundles` 层列表，本文件里的插件行自动生效 ——
+# 不再需要手工编辑 profile 的 cordis.patch.yml。
+#
+# 覆盖方式：profile 自己的 cordis.patch.yml（或 --patch 覆盖层）里写一个同 id 的
+# 顶层条目即可整体替换 config（patch 是整行替换，不做深度合并）：
+#
+#   - id: lx-music
+#     config:
+#       providerMode: 'engine'
+#       defaultQuality: '320k'
+#
+# 行 id 为 `lx-music`；若升级前是用手工 insert 的方式装的，请删掉 profile
+# cordis.patch.yml 里那条手工行，避免同一 id 出现两次。
+
+- insert:
+    - id: lx-music
+      name: 'lx-music-for-dsh'
+      config:
+        # LX Music 服务端地址（仅 providerMode: lxserver 需要）
+        lxServerUrl: ''
+        # auto：有 lxServerUrl 用 lxserver，否则用内置引擎
+        # engine：强制内置引擎（内置 SDK 搜索 + 音源脚本直链，完全独立）
+        # lxserver / mock：连接同步服务器 / 内置演示数据
+        providerMode: 'auto'
+        defaultQuality: '320k'
+        qualityFallbackChain: ['flac', '320k', '128k']
+        platformPriority: ['wy', 'tx', 'kg', 'kw', 'mg']
+        autoPullHighestOnSwitch: true
+        fallbackStrategy: 'both'
+        rateLimitPerMinute: 6
