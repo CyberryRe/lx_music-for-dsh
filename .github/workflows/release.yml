@@ -55,6 +55,9 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # 上限保护：音源沙箱会 spawn 子进程、SDK 搜索测试可能触碰外网，卡住时要有界失败
+    # 而不是无限占用 runner（首次上线时 test 步曾在 runner 上挂住 30 分钟以上）。
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -91,7 +94,9 @@ jobs:
       - name: build
         run: npm run build
 
+      # 每例 60s 上限：把"挂住"变成"明确失败并指出是哪一例"，便于定位。
       - name: test
+        timeout-minutes: 10
         run: npm test
 
       - name: 打包产物
