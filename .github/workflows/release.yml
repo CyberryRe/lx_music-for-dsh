@@ -100,7 +100,11 @@ jobs:
         run: npm test
 
       - name: 打包产物
-        run: npm pack --ignore-scripts --pack-destination dist
+        # dist/ 被 .gitignore 排除，干净检出里不存在；而 npm pack --pack-destination
+        # 要求目标目录已存在，否则以 ENOENT 失败（首次上线时就是这样挂在这一步）。
+        run: |
+          mkdir -p dist
+          npm pack --ignore-scripts --pack-destination dist
 
       - uses: actions/upload-artifact@v4
         with:
