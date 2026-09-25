@@ -17,6 +17,12 @@
 #   3) 本工作流自动跑 lint/typecheck/build/test，然后 npm publish
 #   4) 把 npm pack 出的 tarball 传成该 Release 的 asset（GitHub 安装路径需要它）
 #
+# 首次配置前 tag 触发的 run 会在"发布到 npm"这一步失败（还没有信任关系）——这是预期的；
+# 配好 Trusted Publisher 后对该 run 点「Re-run failed jobs」即可完成发布，无需 OTP。
+# 若"追加 lts dist-tag"也失败，手动补一次：
+#   npm dist-tag add lx-music-for-dsh@<版本> lts --otp=<code>
+# （维护者账号是 auth-and-writes，publish / dist-tag 本地都需要一次性验证码。）
+#
 # 注意：本仓库的构建与测试需要 @deepseek-ai/* 运行时包（见 scripts/link-dsh.mjs 的说明），
 # 它们不是 package.json 的依赖，因此 CI 里显式安装一份 DSH 依赖树。构建产物里
 # @deepseek-ai/* 是 external，不会被内联。
@@ -101,3 +107,11 @@ jobs:
       - name: 发布到 npm
         if: startsWith(github.ref, 'refs/tags/') && inputs.dry-run != 'true'
         run: npm publish --provenance --access public
+
+      # 让 latest 与 lts 指向同一版本（1.1.0 起同一条线兼容 DSH 0.1.5～0.1.7）。
+      # dist-tag 属于 npm 的"写操作"，OIDC 凭据是否覆盖它取决于可信发布的作用域，
+      # 所以这里不阻断发布：失败时维护者用 --otp 手动补一次即可（见文件头说明）。
+      - name: 追加 lts dist-tag
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry-run != 'true'
+        continue-on-error: true
+        run: npm dist-tag add "lx-music-for-dsh@${GITHUB_REF_NAME#v}" lts
