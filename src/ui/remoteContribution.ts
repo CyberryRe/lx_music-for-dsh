@@ -27,25 +27,36 @@ import type {
 /** 宽松 JSON 对象（业务结构不在此拦截，host SRC 端也只做 JSON 安全校验）。 */
 const looseObject = (): z.ZodType => z.object({}).passthrough()
 
+/** strict codec 的 0.1.7 形状（协议类型）。 */
+type StrictTypertCodec = Extract<TypertCodec, { mode: 'strict' }>
+/** 0.1.5 形状：`schema` 字段在 0.1.7 已被移除，但保留它才能让同一份产物兼容两个版本。 */
+type LegacyStrictCodec = { readonly schema: TypertSchema }
+/** 双契约 codec：0.1.5 读 `schema`、0.1.7 读 `create()`，互为超集、互不读取对方字段。 */
+type DualStrictCodec = StrictTypertCodec & LegacyStrictCodec
+
 /**
- * 构造一个 strict codec。
+ * 构造一个**同时兼容 DSH 0.1.5 与 0.1.7** 的 strict codec。
  *
- * **DSH 0.1.7 的破坏性变更**：codec 不再暴露 `schema` 字段，改为必须在**首次边界
- * 使用时**通过 `create()` 现场物化 schema（dsh-api-gateway 的 `decode()` 调
- * `codec.create().parse(value)`，dsh-typert-registry 的 `validateCodec()` 要求
- * `typeof codec.create === 'function'`）。0.1.5 时代的 `{ mode, typeSymbol, schema }`
- * 形状会让 `ctx.remote.$mount()` 直接抛 `strict codec has no create() factory`，
- * 整个 client 插件无法激活（GUI 报 "web boot: N entries did not activate"）。
+ * 两个版本的契约正好互补（都是"校验某字段存在 + 用它 parse"）：
  *
- * 惰性 + 记忆化：schema 只在第一次边界使用时构造一次，符合协议"首次使用时物化"的语义
- * （plugin bundle 自带一份 zod 实例，schema 必须来自本 realm）。
+ * | | 0.1.5 | 0.1.7 |
+ * |---|---|---|
+ * | 校验 | `typeof codec.schema.parse === 'function'` | `typeof codec.create === 'function'` |
+ * | 解码 | `codec.schema.parse(v)` | `codec.create().parse(v)` |
+ *
+ * 把两个字段**同时**放上去，同一份 bundle 在两个运行时上都能通过校验并正确解码
+ * （双方都只读自己那一个字段，多出来的字段不会被拒绝）。这样插件就不再需要"按 DSH
+ * 版本配对安装"，`latest` 对任何人都安全。
+ *
+ * 代价：`schema` 必须**立即**物化（0.1.5 直接读它，无法懒加载）；`create()` 复用同一实例。
  */
-const strictCodec = (typeSymbol: string, build: () => z.ZodType): TypertCodec => {
-  let materialized: TypertSchema | undefined
+const strictCodec = (typeSymbol: string, build: () => z.ZodType): DualStrictCodec => {
+  const schema = build() as TypertSchema
   return {
     mode: 'strict',
     typeSymbol,
-    create: () => (materialized ??= build()),
+    schema,
+    create: () => schema,
   }
 }
 

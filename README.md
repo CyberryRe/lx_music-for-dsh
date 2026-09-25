@@ -71,19 +71,21 @@ node scripts/install-to-dsh.mjs            # 打包 + dsh plugin add + 旧版残
 ### 给使用者的两种安装方式
 
 ```bash
-# 方式一：npm（推荐；latest 即最新版）
-npm i lx-music-for-dsh@1.0.2
-dsh plugin --profile web add lx-music-for-dsh@1.0.2
+# 方式一：npm（推荐；latest 与 lts 都指向 1.1.0）
+npm i lx-music-for-dsh@1.1.0
+dsh plugin --profile web add lx-music-for-dsh@1.1.0
 
 # 方式二：GitHub Release 的预构建包（离线可用，不需要构建脚本、不需要 allowBuilds）
-pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.0.2/lx-music-for-dsh-1.0.2.tgz
+pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.1.0/lx-music-for-dsh-1.1.0.tgz
 ```
 
-> ⚠️ **版本必须与 DSH 匹配**：0.1.7 及以后用 **1.0.2**，0.1.5 及更早只能留在 **1.0.1**——
-> 两者的 Typert strict codec 契约相反，装错会让 client 插件整体激活失败
-> （`web boot: N entries did not activate`），而 host 端日志看起来完全正常。
+> ✅ **1.1.0 同时兼容 DSH 0.1.5 与 0.1.7**（client 面同时携带两代 codec 契约），所以默认装最新版即可，
+> 不需要再按 DSH 版本挑插件版本。
 >
-> 另外**不要**用 `github:CyberryRe/lx_music-for-dsh#v1.0.2` 这种 git 依赖写法：pnpm ≥10.26
+> 旧版本是互斥的，仅作参考：**1.0.2** 只能在 0.1.7 及以后用；**1.0.1** 只能在 0.1.5 及更早用。
+> 装错会让 client 插件整体激活失败（`web boot: N entries did not activate`），而 host 端日志看起来完全正常。
+>
+> 另外**不要**用 `github:CyberryRe/lx_music-for-dsh#v1.1.0` 这种 git 依赖写法：pnpm ≥10.26
 > 默认禁止 git 依赖执行 `prepare`，而本仓库的 `lib/` 不在 git 里、必须现场构建。原因见
 > [docs/development.md](docs/development.md) §6.4。
 
@@ -123,29 +125,53 @@ manifest.json     插件清单（元数据：入口、生命周期、工具、�
 src/index.ts      host 入口
 src/client.ts     client 入口
 src/ui/           React 组件
-tests/            单元测试（131 例）
+tests/            单元测试（136 例）
 docs/             开发文档 / DSH 与 LX Music 研读笔记
 ```
 
 ## 版本兼容性
 
-| 插件版本 | DSH 版本 |
-|---|---|
-| 1.0.2 | `@deepseek-ai/dsh@0.1.7-rc.2`（Typert strict codec 改为 `create()`；0.1.5 及更早**不兼容**） |
-| 1.0.1 | `@deepseek-ai/dsh@0.1.5-rc.1`（`dsh.bundle` 组合层，一条命令安装） |
-| 1.0.0 | `@deepseek-ai/dsh@0.1.0-rc.6`（需手工写 profile patch 行） |
+| 插件版本 | DSH 版本 | 说明 |
+|---|---|---|
+| **1.1.0** | **`@deepseek-ai/dsh` 0.1.5 ～ 0.1.7 均可** | **双契约**：client 面同时携带 0.1.5 的 `codec.schema` 与 0.1.7 的 `create()`；并修复桌面版（Electron 宿主）音源校验/导入子进程以 `code=0` 退出 |
+| 1.0.2 | 仅 0.1.7 及以后 | strict codec 的 `schema` → `create()`（0.1.5 及更早**不兼容**） |
+| 1.0.1 | 仅 0.1.5 及更早 | `dsh.bundle` 组合层，一条命令安装（0.1.7 上**不兼容**） |
+| 1.0.0 | `@deepseek-ai/dsh@0.1.0-rc.6` | 需手工写 profile patch 行 |
 
-从 1.0.1 升级到 1.0.2 只需**先升级 DSH 到 0.1.7**，然后重装插件包（插件配置与
-`$DSH_HOME/storages/lx_music.json` 中的数据格式都没变）。
+**从 1.0.x 升级到 1.1.0 不需要动 DSH 版本**，也不必迁移数据（插件配置与
+`$DSH_HOME/storages/lx_music.json` 格式都没变）。1.1.0 之后同一条线可以继续服务
+0.1.5 与 0.1.7 两代运行时，因此它同时挂在 npm 的 `latest` 与 `lts` 两个 dist-tag 上：
 
-0.1.7 的破坏性变更在 **client 面**：Typert 的 strict codec 不再暴露 `schema` 字段，改为
-`create(): TypertSchema` 在首次边界使用时现场物化（`dsh-api-gateway` 的 `decode()` 调
-`codec.create().parse(value)`，`dsh-typert-registry` 要求 `typeof codec.create === 'function'`）。
-1.0.1 那套 `{ mode, typeSymbol, schema }` 的 descriptor 会在 `ctx.remote.$mount()` 抛
-`strict codec has no create() factory`，导致整个 client 插件无法激活
-（GUI 报 `web boot: N entries did not activate`，侧边栏卡片直接不出现）。
-1.0.2 修好了这一处，并把手写 descriptor 的**类型**直接绑到 DSH 真实协议类型
-（`import type … from '@deepseek-ai/dsh-typert-protocol'`），协议再漂移会在 `tsc` 阶段暴露。
+```bash
+npm i lx-music-for-dsh@latest   # 或 @lts，两者都是 1.1.0
+```
+
+### 为什么之前需要"按 DSH 版本配对安装"
+
+0.1.5 与 0.1.7 的 Typert strict codec 契约正好**相反**（都在"校验字段存在 + 用它 parse"）：
+
+| | 0.1.5 | 0.1.7 |
+|---|---|---|
+| 校验 | `typeof codec.schema.parse === 'function'` | `typeof codec.create === 'function'` |
+| 解码 | `codec.schema.parse(v)` | `codec.create().parse(v)` |
+
+只满足一边的 descriptor 会在 `ctx.remote.$mount()` 抛
+`strict codec has no create() factory`（或 0.1.5 侧的 `has no parse() method`），导致整个
+client 插件无法激活（GUI 报 `web boot: N entries did not activate`，侧边栏卡片直接不出现），
+而 **host 端日志完全正常**，极易误判为"插件没问题"。
+
+1.1.0 的做法是**两个字段同时提供**（双方都只读自己那一个字段，多出来的字段不会被拒绝），
+并用 `tests/remote-contribution.test.ts` 逐字复刻**两个版本**的校验+解码路径来锁定。
+descriptor 的**类型**直接绑 DSH 真实协议类型（`import type … from '@deepseek-ai/dsh-typert-protocol'`），
+协议再漂移会在 `tsc` 阶段暴露。
+
+### 桌面版（Electron 宿主）的沙箱子进程
+
+桌面版里插件跑在 Electron 主进程，`process.execPath` 是 **Electron 主程序**而不是 node。
+1.0.x 直接用它 spawn 音源 runner，会再起一个 GUI 实例并因单实例锁立刻以 `code=0` 退出，
+表现为「音源 X 子进程在初始化期间退出（code=0）」，音源校验/导入全部失败。
+1.1.0 给子进程注入 `ELECTRON_RUN_AS_NODE=1`（DSH 自己起内部 Node 脚本也用这一招），
+`tests/sandbox-env.test.ts` 锁定该行为与环境白名单的安全边界。
 
 从 1.0.0 升级到 1.0.1 要处理两件事（第 2 件自动完成）：
 

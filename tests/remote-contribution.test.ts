@@ -4,11 +4,13 @@
 // 因为 client bundle 的激活失败只表现为 DSH shell 的
 // `web boot: N entries did not activate`，且本仓库没有常驻浏览器：
 //
-// 1) strict codec 的 wire 形状（DSH 0.1.7 破坏性变更）：
-//    0.1.5 是 `{ mode, typeSymbol, schema }`；0.1.7 移除了 `schema`，要求
-//    `create(): TypertSchema`（dsh-api-gateway 的 decode 调 `codec.create().parse(v)`，
-//    dsh-typert-registry 的 validateCodec 检查 `typeof codec.create === 'function'`）。
-//    旧形状会让 `ctx.remote.$mount()` 抛 "strict codec has no create() factory"。
+// 1) strict codec 的 wire 形状（0.1.5 与 0.1.7 的契约正好相反）：
+//    0.1.5 是 `{ mode, typeSymbol, schema }`，校验 `typeof codec.schema.parse === 'function'`、
+//    解码 `codec.schema.parse(v)`；0.1.7 移除了 `schema`，要求 `create(): TypertSchema`，
+//    校验 `typeof codec.create === 'function'`、解码 `codec.create().parse(v)`。
+//    只满足一边会让 `ctx.remote.$mount()` 抛 "strict codec has no … factory/parse() method"，
+//    整个 client 插件无法激活（GUI 报 "web boot: N entries did not activate"）。
+//    本仓库的方案是两个字段**同时**提供，因此这里逐字复刻**两个版本**的校验+解码路径。
 // 2) client 面与 host `@Remote` 方法的**双向一致**：漏一个方法 / 参数个数对不上，
 //    调用会在 wire 层被拒（"rejected <param>"）或直接找不到端点。
 
@@ -38,21 +40,66 @@ function codecsOf(descriptor: InvocationDescriptor): Array<[string, TypertCodec]
 }
 
 describe('TYPERT client 面契约（remoteContribution）', () => {
-  it('每个 strict codec 都提供 0.1.7 要求的 create()，且不再暴露 schema', () => {
+  it('每个 strict codec 同时携带 0.1.7 的 create() 与 0.1.5 的 schema', () => {
     for (const descriptor of LXP_REMOTE_CONTRIBUTION.descriptors) {
       for (const [subject, raw] of codecsOf(descriptor)) {
         const codec = strictCodec(raw, subject)
         expect(typeof codec.typeSymbol).toBe('string')
         expect(codec.typeSymbol.length).toBeGreaterThan(0)
-        // 0.1.7：schema 字段已从 TypertCodec 移除，必须靠 create() 现场物化。
+        // 0.1.7：dsh-typert-registry 的 validateCodec 要求 create() 是函数。
         expect(typeof codec.create).toBe('function')
-        expect('schema' in codec).toBe(false)
         const schema = codec.create()
         expect(typeof schema.parse).toBe('function')
         // 记忆化：同一次边界使用不应反复重建 schema。
         expect(codec.create()).toBe(schema)
+        // 0.1.5：validateCodec 要求 codec.schema.parse 是函数（0.1.7 已移除该字段，
+        // 但保留它才能让同一份 bundle 在两个运行时上都激活）。
+        const legacy = (codec as { schema?: { parse?: unknown } }).schema
+        if (legacy === undefined) throw new Error(`${subject}: 缺少 0.1.5 兼容所需的 schema 字段`)
+        expect(typeof legacy.parse).toBe('function')
       }
     }
+  })
+
+  it('两套 DSH 版本的校验 + 解码路径都能走通（逐字复刻两个版本的实现）', () => {
+    const byMethod = new Map(LXP_REMOTE_CONTRIBUTION.descriptors.map((d) => [d.method, d]))
+    const paramCodec = (method: string, param: string): TypertCodec => {
+      const p = byMethod.get(method)!.parameters.find((x) => x.name === param)
+      if (p === undefined) throw new Error(`缺少参数 ${method}/${param}`)
+      return p.codec
+    }
+
+    // ── 0.1.5：dsh-typert-registry/lib/client.js
+    //    if (typeof codec.schema.parse !== 'function') throw new Error('strict codec has no parse() method')
+    //    dsh-api-gateway decode: value = codec.schema.parse(value)
+    const validate015 = (codec: TypertCodec, subject: string): { parse(v: unknown): unknown } => {
+      const strict = codec as { schema?: { parse?: unknown } }
+      if (strict.schema === undefined || typeof strict.schema.parse !== 'function') {
+        throw new Error(`typert(0.1.5): ${subject} strict codec has no parse() method`)
+      }
+      return strict.schema as { parse(v: unknown): unknown }
+    }
+    expect(validate015(paramCodec('seek', 'seconds'), 'seek:seconds').parse(12.5)).toBe(12.5)
+    expect(validate015(paramCodec('setMute', 'mute'), 'setMute:mute').parse(true)).toBe(true)
+    expect(validate015(paramCodec('addMusic', 'position'), 'addMusic:position').parse('next')).toBe('next')
+
+    // ── 0.1.7：dsh-typert-registry/lib/client.js
+    //    if (typeof codec.create !== 'function') throw new Error('strict codec has no create() factory')
+    //    dsh-api-gateway decode: value = codec.create().parse(value)
+    const validate017 = (codec: TypertCodec, subject: string): { parse(v: unknown): unknown } => {
+      if (codec.mode !== 'strict' || typeof codec.create !== 'function') {
+        throw new Error(`typert(0.1.7): ${subject} strict codec has no create() factory`)
+      }
+      return codec.create() as unknown as { parse(v: unknown): unknown }
+    }
+    expect(validate017(paramCodec('seek', 'seconds'), 'seek:seconds').parse(12.5)).toBe(12.5)
+    expect(validate017(paramCodec('setMute', 'mute'), 'setMute:mute').parse(true)).toBe(true)
+    expect(validate017(paramCodec('addMusic', 'position'), 'addMusic:position').parse('next')).toBe('next')
+
+    // 结果 codec 同样要过两套校验（两个版本都会 decode 返回值）。
+    const result = byMethod.get('getState')!.result
+    expect(typeof validate015(result, 'getState:result').parse).toBe('function')
+    expect(typeof validate017(result, 'getState:result').parse).toBe('function')
   })
 
   it('create() 产出的 schema 真的能解析（不是空壳）', () => {

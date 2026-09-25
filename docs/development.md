@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（131 例） |
+| `npm test` | 编译并运行全部单元测试（136 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -96,7 +96,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 - 插件行配置错误会在启动时以 FAILED fiber 报告（`dsh --profile web --dump-config` 可检查组合配置与行覆盖结果）。
 - 若 GUI 打不开，先看启动终端：任一 client 行未激活会让 shell 抛
   `web boot: N entries did not activate`；出现 `duplicate loader entry id` 说明 profile 里
-  还有手工插入的同 id 行（见 §10.1）。
+  还有手工插入的同 id 行（见 §10.3）。
 
 ### 4.2 client 侧（浏览器）
 
@@ -136,14 +136,18 @@ npm run pack        # 生成 lx-music-for-dsh-<version>.tgz
 
 ## 6. 安装到 DSH（web 模式）
 
-> 适用 **@deepseek-ai/dsh ≥ 0.1.7-rc.2**。该版本起插件包用 `dsh.bundle.patch` 声明自己是
-> 一个 profile 组合层，`dsh plugin add` 会自动激活，**不再需要手工编辑 profile 的
-> cordis.patch.yml**（0.1.0-rc.6 时代的手工行在本版本会导致
+> 适用 **@deepseek-ai/dsh ≥ 0.1.5-rc.1**。插件包用 `dsh.bundle.patch` 声明自己是一个
+> profile 组合层，`dsh plugin add` 会自动激活，**不再需要手工编辑 profile 的
+> cordis.patch.yml**（0.1.0-rc.6 时代的手工行会导致
 > `duplicate loader entry id: lx-music`，dsh 直接拒绝启动）。
 >
-> **0.1.5 及更早不要安装 1.0.2**：0.1.7 移除了 Typert strict codec 的 `schema` 字段
-> （改为 `create()`），1.0.2 的 client 面按新契约书写，旧 DSH 会在 `$mount` 抛
-> `strict codec has no create() factory`。反之 1.0.1 的 bundle 在 0.1.7 上同样无法激活。
+> **1.1.0 起同时兼容 0.1.5 与 0.1.7**（client 面同时携带两代 codec 契约），所以默认装最新版
+> 即可。只有装**旧版本**才需要配对：1.0.2 仅 0.1.7+、1.0.1 仅 0.1.5-，装错会在 `$mount`
+> 抛 `strict codec has no create() factory`（或 0.1.5 侧的 `has no parse() method`）。
+>
+> **桌面版（Electron 宿主）从 1.1.0 起才可用**：1.0.x 在 Electron 主进程里 spawn 子进程时
+> 把 `process.execPath`（= Electron 主程序）当成 node，子进程会以 `code=0` 立即退出，
+> 音源校验/导入全部失败。详见 §10.1。
 
 ### 6.1 常规安装（一条命令）
 
@@ -166,7 +170,7 @@ node scripts/install-to-dsh.mjs --dry-run       # 只看会做什么
 
 ```bash
 npm run pack
-dsh plugin --profile web add D:\deepseek_harness\lx_plugin\dist\lx-music-for-dsh-1.0.2.tgz
+dsh plugin --profile web add D:\deepseek_harness\lx_plugin\dist\lx-music-for-dsh-1.1.0.tgz
 ```
 
 重启 `dsh web`，刷新浏览器：
@@ -235,13 +239,13 @@ v2.12.2 保持一致：100% 由音源脚本提供。
 **推荐做法**——直接装 tag 上附带的预构建 tarball（不需要任何构建，也不需要 `allowBuilds`）：
 
 ```bash
-pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.0.2/lx-music-for-dsh-1.0.2.tgz
+pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.1.0/lx-music-for-dsh-1.1.0.tgz
 ```
 
 桌面版插件管理器的「从 URL 安装」也可以直接填上面这个 URL。实测：`pnpm install` 11 秒装好、
-`lib/` 齐全、`client.js` 与 npm 上那份 md5 一致（`83C7AA76C7EB`），全程未触发任何构建脚本。
+`lib/` 齐全、`client.js` 与 npm 上那份 md5 一致（1.0.2 时为 `83C7AA76C7EB`），全程未触发任何构建脚本。
 
-**为什么 `pnpm add github:CyberryRe/lx_music-for-dsh#v1.0.2` 走不通**
+**为什么 `pnpm add github:CyberryRe/lx_music-for-dsh#v1.1.0` 走不通**
 
 pnpm ≥ 10.26 出于供应链安全默认禁止 git 依赖执行 `prepare` 脚本（
 [pnpm 10.26 发布说明](https://pnpm.io/blog/releases/10.26)），而本仓库的 `lib/`
@@ -254,7 +258,7 @@ pnpm ≥ 10.26 出于供应链安全默认禁止 git 依赖执行 `prepare` 脚�
 
    | 依赖写法 | pnpm 要求放进 allowBuilds 的 key |
    |---|---|
-   | `github:CyberryRe/lx_music-for-dsh#v1.0.2` | `lx-music-for-dsh@git+https://github.com/CyberryRe/lx_music-for-dsh.git#<sha>` |
+   | `github:CyberryRe/lx_music-for-dsh#v1.1.0` | `lx-music-for-dsh@git+https://github.com/CyberryRe/lx_music-for-dsh.git#<sha>` |
    | 放行后再装（改为抓 codeload tarball） | `lx-music-for-dsh@https://codeload.github.com/CyberryRe/lx_music-for-dsh/tar.gz/<sha>` |
 
    即每发一个新版本、用户都要重新改一次 profile 的 `pnpm-workspace.yaml`，不具可用性
@@ -270,6 +274,11 @@ pnpm ≥ 10.26 出于供应链安全默认禁止 git 依赖执行 `prepare` 脚�
 > 如果将来确实要让 git 依赖可用，需要：把 `@deepseek-ai/dsh` 声明为 `devDependencies`
 > （让干净检出能构建，代价是 lockfile 增加约 500 个包），并接受上面「每 commit 一条
 > allowBuilds」的配置负担。当前结论是**不值得**，用 Release asset 即可。
+>
+> 该结论已实测：干净克隆 + `npm i --no-save @deepseek-ai/dsh@0.1.7-rc.2`（npm 会把
+> `@deepseek-ai/*` 全部提升到根 `node_modules`）之后，`tsc --noEmit` 与
+> `node scripts/build.mjs` 均通过——所以缺的只是"把它声明成依赖"这一步。
+> 同一条命令也是 CI 里提供运行时的方式，见 `.github/workflows/release.yml`。
 
 > **发版时别忘了传 asset**：每次发布（`npm publish`）之后，把同一个 tarball 作为 asset 传到
 > 对应 tag 的 Release 上，否则上面的 URL 会 404：
@@ -298,7 +307,7 @@ pnpm ≥ 10.26 出于供应链安全默认禁止 git 依赖执行 `prepare` 脚�
 设置窗口的修改会持久化到 `$DSH_HOME/storages/lx_music.json`（storage domain `lx_music`），
 优先于行配置。该 domain 的 schema 是**持久层读边界校验**：任一条存储记录不匹配就会让整个
 `open` 失败、插件降级为内存存储，因此改动 schema 必须与代码实际写入的形状逐字段对齐
-（见 §10.1 与 `tests/host.integration.test.ts`）。
+（见 §10.3 与 `tests/host.integration.test.ts`）。
 
 ## 8. 测试
 
@@ -336,13 +345,15 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（131 例，运行在镜像的 0.1.7-rc.2 运行时上）
+- [ ] `npm test` 全部通过（136 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）
 - [ ] `dsh --profile <p> --dump-config` 中 `lx-music` 行只出现一次，且 profile 覆盖生效
 - [ ] 启动日志为 `[lx-music-for-dsh] 插件已加载，provider: …，storage: durable`
-      （`storage: memory` 表示持久化不可用，见 §10.1）
+      （`storage: memory` 表示持久化不可用，见 §10.3）
+- [ ] **桌面版（Electron 宿主）能导入音源脚本**：设置窗口「音源管理」导入 `.js` 不再报
+      「子进程在初始化期间退出（code=0）」（该故障见 §10.1）
 - [ ] `node scripts/browser-smoke.mjs <url>` 退出码 0：GUI 启动、卡片出现、
       主窗口打开、`setPlayMode` 往返、设置窗口加载音源列表
 - [ ] 安装到 web profile 后侧边栏出现卡片，按钮/进度条实时生效
@@ -357,11 +368,55 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 
 | 插件版本 | DSH 版本 | 说明 |
 |---|---|---|
+| **1.1.0** | **0.1.5 ～ 0.1.7 均可** | **双契约**（codec 同时带 `schema` 与 `create()`）+ **桌面版 Electron 沙箱修复**（`ELECTRON_RUN_AS_NODE`）；dist-tag `latest` 与 `lts` 都指向它 |
 | 1.0.2 | `@deepseek-ai/dsh@0.1.7-rc.2` | **client 面契约适配**：Typert strict codec 的 `schema` → `create()`；descriptor 类型改绑 DSH 真实协议类型；`link-dsh.mjs` 支持显式来源 + 桌面版版本漂移比对 |
 | 1.0.1 | `@deepseek-ai/dsh@0.1.5-rc.1`（随包依赖 `*-0.1.5-rc.2`） | 声明 `dsh.bundle.patch`，`dsh plugin add` 一条命令激活；`dsh.client.inject` 修正为现存包；client externals 对齐 0.1.5 基线模块表；**修复 storage domain schema 导致的持久化静默失效** |
 | 1.0.0 | `@deepseek-ai/dsh@0.1.0-rc.6` | 需要手工在 profile `cordis.patch.yml` 里 insert 插件行 |
 
-### 10.1 升级到 1.0.2：client 面的 strict codec 契约变了
+### 10.1 1.1.0：双契约（一份产物兼容两代 DSH）+ 桌面版沙箱修复
+
+1.1.0 有两个改动，第一个消除了"按 DSH 版本配对安装"这件事，第二个修掉了桌面版上
+音源脚本完全不可用的问题。
+
+**(1) client 面 codec 改为"双契约"。** 0.1.5 与 0.1.7 的契约正好相反（详见 §10.2 的对照表），
+因此 1.1.0 的 `strictCodec()` **同时**返回 `schema` 与 `create()`：
+
+```ts
+const schema = build()            // 0.1.5 直接读它，无法懒加载
+return { mode: 'strict', typeSymbol, schema, create: () => schema }
+```
+
+0.1.5 只读 `codec.schema`、0.1.7 只读 `codec.create`，双方都不校验"多余字段"，所以同一份
+bundle 在两个运行时上都能通过校验并正确解码（已对着 0.1.5-rc.2 与 0.1.7-rc.2 的
+`validateCodec` / `decode` 源码逐字核对）。`tests/remote-contribution.test.ts` 逐字复刻了
+**两个版本**的校验+解码路径作为回归锁。
+
+**(2) 桌面版（Electron 宿主）音源子进程修复。** 桌面版里插件跑在 Electron 主进程，
+`process.execPath` 是 **Electron 主程序**而不是 node：
+
+```
+spawn(process.execPath, [runner])   // 桌面版 → 又起一个 GUI 实例
+                                    // → 单实例锁 → 立即 code=0 退出
+```
+
+用户看到的是：
+
+```
+校验失败：音源 temp_validate 子进程在初始化期间退出（code=0）
+导入失败：音源 长青SVIP音源(二改修复版).js 子进程在初始化期间退出（code=0）
+```
+
+修法是给子进程环境注入 `ELECTRON_RUN_AS_NODE=1`（DSH 自己起内部 Node 脚本用的也是这一招；
+旁证：插件管理器日志里 pnpm 的命令行是
+`"…\DeepSeek Harness.exe" --expose-internals …pnpm.mjs`）。注意 `buildChildEnv()` 是
+**白名单**，所以这个变量必须显式注入，不能指望从 `process.env` 透传。
+
+实测（`spawn(electron, [runner], {env:{ELECTRON_RUN_AS_NODE:'1'}})`）：
+`星海音乐源 v2.3.11.js` / `lx-music-source-v6 (修复).js` / `长青SVIP音源(二改修复版) v1.2.0.js` /
+`野花音源.js` / `HYWmusic_beta_公益测试 v0.74.0.js` **全部 init OK**。
+`tests/sandbox-env.test.ts` 锁定该行为，同时锁住环境白名单不泄漏宿主机密。
+
+### 10.2 升级到 1.0.2：client 面的 strict codec 契约变了
 
 **先升 DSH 再升插件**（0.1.5 及更早不要装 1.0.2，反之 1.0.1 在 0.1.7 上也起不来）。
 
@@ -392,7 +447,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
    `PlaybackService` 的 `@Remote` 方法**双向一致**（方法名集合 + 形参个数），
    避免以后加 `@Remote` 方法忘了同步 client 面（wire 会以 `rejected <param>` / 找不到端点失败）。
 
-### 10.2 升级到 1.0.1 必须处理的两件事
+### 10.3 升级到 1.0.1 必须处理的两件事
 
 **1) 删除 profile 里遗留的手工插件行。**
 1.0.0 靠手工在 `cordis.patch.yml` 里 `insert` 一条 `id: lx-music`。1.0.1 起该行由包内
@@ -427,7 +482,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 `storage: memory` 表示 storage domain 打开失败（状态不会持久化）—— 1.0.1 起这条降级同时写
 `ctx.logger` 与 stderr，不再静默；排查时看启动终端的完整错误堆栈。
 
-### 10.3 回归覆盖
+### 10.4 回归覆盖
 
 | 测试 | 锁定的行为 |
 |---|---|

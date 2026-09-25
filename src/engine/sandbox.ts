@@ -127,17 +127,33 @@ function resolveRunnerPath(): string {
   return candidates[0]!
 }
 
-/** 子进程环境白名单：只透传系统路径与代理变量，不泄漏任何 DSH 机密。 */
-function buildChildEnv(): Record<string, string> {
-  const env: Record<string, string> = { NODE_ENV: process.env.NODE_ENV ?? 'production' }
+/**
+ * 子进程环境白名单：只透传系统路径与代理变量，不泄漏任何 DSH 机密。
+ *
+ * **Electron 宿主的关键处理**：桌面版（dsh-desktop）的插件跑在 Electron 主进程里，此时
+ * `process.execPath` 是 **Electron 主程序**（`DeepSeek Harness.exe`）而不是 node。直接
+ * 用它 spawn 会再起一个 GUI 实例，撞上单实例锁后立刻以 **code=0** 退出——表现为
+ * 「音源 X 子进程在初始化期间退出（code=0）」，音源校验/导入全部失败。带上
+ * `ELECTRON_RUN_AS_NODE=1` 后，同一个可执行文件以纯 Node 模式运行 runner（DSH 自己起
+ * 内部 Node 脚本用的也是这一招）。
+ *
+ * @param hostIsElectron - 宿主是否 Electron（默认按 `process.versions.electron` 判断）。
+ * @param source - 源环境（默认 `process.env`）。
+ */
+export function buildChildEnv(
+  hostIsElectron: boolean = Boolean(process.versions.electron),
+  source: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = { NODE_ENV: source.NODE_ENV ?? 'production' }
   const allowlist = [
     'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'ComSpec', 'PATHEXT',
     'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
   ]
   for (const key of allowlist) {
-    const value = process.env[key]
+    const value = source[key]
     if (value) env[key] = value
   }
+  if (hostIsElectron) env.ELECTRON_RUN_AS_NODE = '1'
   return env
 }
 

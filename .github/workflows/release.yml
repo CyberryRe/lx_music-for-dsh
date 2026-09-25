@@ -1,0 +1,103 @@
+# 发布流水线：tag 触发，走 npm 的 OIDC 可信发布（Trusted Publishing）。
+#
+# 为什么需要这个工作流：
+#   - 维护者账号是 `auth-and-writes` 两步验证，`npm publish` 需要一次性验证码，
+#     CI 里没有认证器 → 每次发版都得有人在键盘前。
+#   - 可信发布用 GitHub OIDC 换取短时凭据，不需要 NPM_TOKEN、不需要 OTP，
+#     并自动带 provenance 签名（对 npm 的发布期供应链扫描也更友好）。
+#
+# 一次性配置（只能由包维护者在网页上做）：
+#   npmjs.com → 包 lx-music-for-dsh → Settings → Trusted Publisher →
+#   GitHub Actions，填：Organization/user = CyberryRe，
+#   Repository = lx_music-for-dsh，Workflow filename = release.yml，Environment 留空。
+#
+# 发版流程（维护者）：
+#   1) 改 package.json 版本号 + 更新文档，提交推送
+#   2) git tag -a v<版本> -m "..." && git push origin v<版本>
+#   3) 本工作流自动跑 lint/typecheck/build/test，然后 npm publish
+#   4) 把 npm pack 出的 tarball 传成该 Release 的 asset（GitHub 安装路径需要它）
+#
+# 注意：本仓库的构建与测试需要 @deepseek-ai/* 运行时包（见 scripts/link-dsh.mjs 的说明），
+# 它们不是 package.json 的依赖，因此 CI 里显式安装一份 DSH 依赖树。构建产物里
+# @deepseek-ai/* 是 external，不会被内联。
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 只做校验与打包，不发布
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # OIDC 可信发布所必需
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # CI 里用来提供 @deepseek-ai/* 类型与运行时（构建 + 单测需要）。与 link-dsh.mjs 保持一致。
+  DSH_RUNTIME_VERSION: '0.1.7-rc.2'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      # 安装本仓库的 devDependencies。--ignore-scripts 很关键：package.json 的
+      # `prepare` 会在缺 @deepseek-ai/* 时构建失败（原因见 docs/development.md §6.4）。
+      - name: 安装依赖
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      # 提供 @deepseek-ai/*（构建的类型解析 + 单测运行时的 cordis 等）。
+      - name: 安装 DSH 运行时
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund "@deepseek-ai/dsh@${DSH_RUNTIME_VERSION}"
+
+      - name: 校验 tag 与 package.json 版本一致
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node -e "
+            const v = require('./package.json').version;
+            const t = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+            if (v !== t) { console.error('tag ' + t + ' != package.json ' + v); process.exit(1); }
+            console.log('version', v, 'OK');
+          "
+
+      - name: lint
+        run: npm run lint
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: build
+        run: npm run build
+
+      - name: test
+        run: npm test
+
+      - name: 打包产物
+        run: npm pack --ignore-scripts --pack-destination dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: dist/*.tgz
+          if-no-files-found: error
+
+      # 可信发布：不需要 NPM_TOKEN，npm CLI 用 OIDC 换短时凭据。
+      - name: 发布到 npm
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry-run != 'true'
+        run: npm publish --provenance --access public
