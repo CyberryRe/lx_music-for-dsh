@@ -68,6 +68,25 @@ node scripts/install-to-dsh.mjs            # 打包 + dsh plugin add + 旧版残
 插件包用 `dsh.bundle.patch` 声明为 profile 组合层，`dsh plugin add` 会自动激活，
 无需手工编辑 profile 的 `cordis.patch.yml`。详见 [docs/development.md](docs/development.md)（§6）。
 
+### 给使用者的两种安装方式
+
+```bash
+# 方式一：npm（推荐；latest 即最新版）
+npm i lx-music-for-dsh@1.0.2
+dsh plugin --profile web add lx-music-for-dsh@1.0.2
+
+# 方式二：GitHub Release 的预构建包（离线可用，不需要构建脚本、不需要 allowBuilds）
+pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.0.2/lx-music-for-dsh-1.0.2.tgz
+```
+
+> ⚠️ **版本必须与 DSH 匹配**：0.1.7 及以后用 **1.0.2**，0.1.5 及更早只能留在 **1.0.1**——
+> 两者的 Typert strict codec 契约相反，装错会让 client 插件整体激活失败
+> （`web boot: N entries did not activate`），而 host 端日志看起来完全正常。
+>
+> 另外**不要**用 `github:CyberryRe/lx_music-for-dsh#v1.0.2` 这种 git 依赖写法：pnpm ≥10.26
+> 默认禁止 git 依赖执行 `prepare`，而本仓库的 `lib/` 不在 git 里、必须现场构建。原因见
+> [docs/development.md](docs/development.md) §6.4。
+
 端到端验证（真实浏览器，需要本机有 Chrome/Edge）：
 
 ```bash

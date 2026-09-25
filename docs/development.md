@@ -229,6 +229,59 @@ node scripts/browser-smoke.mjs "http://127.0.0.1:3099/?token=<token>"
 音源脚本（.js，lx-music-desktop 格式）在设置窗口「音源管理」页导入（文件/URL/粘贴），
 导入后自动启用；脚本与顺序持久化在 `$DSH_HOME/storages`。内置直链与 lx-music-desktop
 v2.12.2 保持一致：100% 由音源脚本提供。
+
+### 6.4 从 GitHub 安装：用 Release asset，不要用 git 依赖
+
+**推荐做法**——直接装 tag 上附带的预构建 tarball（不需要任何构建，也不需要 `allowBuilds`）：
+
+```bash
+pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.0.2/lx-music-for-dsh-1.0.2.tgz
+```
+
+桌面版插件管理器的「从 URL 安装」也可以直接填上面这个 URL。实测：`pnpm install` 11 秒装好、
+`lib/` 齐全、`client.js` 与 npm 上那份 md5 一致（`83C7AA76C7EB`），全程未触发任何构建脚本。
+
+**为什么 `pnpm add github:CyberryRe/lx_music-for-dsh#v1.0.2` 走不通**
+
+pnpm ≥ 10.26 出于供应链安全默认禁止 git 依赖执行 `prepare` 脚本（
+[pnpm 10.26 发布说明](https://pnpm.io/blog/releases/10.26)），而本仓库的 `lib/`
+被 `.gitignore` 排除，必须现场构建，于是有两道独立的坎：
+
+1. **放行 key 必须精确到 commit + 抓取 URL，且形式不稳定。**
+   实测 `allowBuilds: { lx-music-for-dsh: true }`（只写包名）**无效**，仍报
+   `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`；必须粘贴 pnpm 报错里打印的那一行。而那一行会
+   随 pnpm 实际抓取方式变化：
+
+   | 依赖写法 | pnpm 要求放进 allowBuilds 的 key |
+   |---|---|
+   | `github:CyberryRe/lx_music-for-dsh#v1.0.2` | `lx-music-for-dsh@git+https://github.com/CyberryRe/lx_music-for-dsh.git#<sha>` |
+   | 放行后再装（改为抓 codeload tarball） | `lx-music-for-dsh@https://codeload.github.com/CyberryRe/lx_music-for-dsh/tar.gz/<sha>` |
+
+   即每发一个新版本、用户都要重新改一次 profile 的 `pnpm-workspace.yaml`，不具可用性
+   （pnpm 侧相关问题：[#12367](https://github.com/pnpm/pnpm/issues/12367)、
+   [#13429](https://github.com/pnpm/pnpm/issues/13429)）。
+
+2. **即便放行，干净检出也构建不出来。** `node scripts/build.mjs` 需要 `@deepseek-ai/*`
+   的类型声明来通过 `@rollup/plugin-typescript` 的类型检查，而本仓库刻意不把它们声明为依赖
+   （开发时由 `scripts/link-dsh.mjs` 从本机已装的 DSH 镜像）。在只有源码的克隆里会得到
+   `TS2307: Cannot find module '@deepseek-ai/dsh-typert-protocol'` 等 6 处错误并级联出
+   `TS7006`，构建直接失败。
+
+> 如果将来确实要让 git 依赖可用，需要：把 `@deepseek-ai/dsh` 声明为 `devDependencies`
+> （让干净检出能构建，代价是 lockfile 增加约 500 个包），并接受上面「每 commit 一条
+> allowBuilds」的配置负担。当前结论是**不值得**，用 Release asset 即可。
+
+> **发版时别忘了传 asset**：每次发布（`npm publish`）之后，把同一个 tarball 作为 asset 传到
+> 对应 tag 的 Release 上，否则上面的 URL 会 404：
+>
+> ```bash
+> npm run pack                                   # → dist/lx-music-for-dsh-<版本>.tgz
+> gh release upload v<版本> dist/lx-music-for-dsh-<版本>.tgz   # 需要 gh CLI
+> ```
+>
+> 本仓库第 1 步已验证：`dist/` 里的 tarball 与 npm 上那份字节一致
+> （`sha1 6cba1b82a96f480cceb4d293c775d8d74ef8eede`），所以传同一个文件即可。
+
 ## 7. 配置项（Config，schemastery）
 
 | 字段 | 默认 | 说明 |
