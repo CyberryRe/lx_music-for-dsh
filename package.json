@@ -41,7 +41,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
-    "test": "node scripts/compile-tests.mjs && node --test --test-isolation=none --test-concurrency=1 \".test-dist/tests/*.test.js\"",
+    "test": "node scripts/compile-tests.mjs && node --test --test-isolation=none --test-concurrency=1 --test-force-exit \".test-dist/tests/*.test.js\"",
     "test:watch": "node scripts/compile-tests.mjs && node --test --test-isolation=none --test-concurrency=1 --watch \".test-dist/tests/*.test.js\"",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests scripts --max-warnings 0",

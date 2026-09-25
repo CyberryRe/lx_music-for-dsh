@@ -312,7 +312,17 @@ pnpm ≥ 10.26 出于供应链安全默认禁止 git 依赖执行 `prepare` 脚�
 ## 8. 测试
 
 ```bash
-npm test
+npm test    # = compile-tests + node --test --test-isolation=none --test-concurrency=1 --test-force-exit
+```
+
+> **为什么带 `--test-force-exit`**：音源沙箱会 spawn 子进程，而 `child.unref()` **不会**
+> unref IPC channel（实测：只 unref 子进程时父进程事件循环被 channel 撑住、永不退出；
+> 补 `channel.unref()` 才干净退出，`src/engine/sandbox.ts` 已修）。这类"用例全过但进程
+> 不退出"的问题在 CI 上表现为 job 无限挂起（首次上线时 `test` 步挂了 63 分钟、
+> `duration_ms` 3818820 而被强制取消），因此测试脚本强制退出作为兜底，CI 里另有
+> job/step 级超时上限。
+
+```bash
 # 覆盖：
 #   ratelimit     滑动窗口限流（允许/拒绝/滑动/重置/边界）
 #   lxclient      超时重试、平台优先级搜索编排、直链请求体、音源 CRUD 与自动启用
@@ -325,6 +335,7 @@ npm test
 #   engine        音源脚本沙箱（加载/调用/超时/错误/工具函数）、引擎调度（轮询/降级/排序）、
 #                 音源管理（上传/启停/删除/校验）、本地持久化、SDK 结果规范化、
 #                 DomainSourceStore 旧文件存储一次性合并
+#   sandbox-env   子进程环境：Electron 宿主注入 ELECTRON_RUN_AS_NODE、白名单不泄漏宿主机密
 #   remote-contribution  client 面契约：每个 strict codec 都提供 0.1.7 要求的 create()
 #                 且不再暴露 schema、create() 可解析且记忆化、descriptor 通过 wire 层
 #                 校验规则、与 PlaybackService 的 @Remote 方法双向一致（方法名 + 形参个数）

@@ -268,8 +268,14 @@ export function loadSourceScript(id: string, script: string, options: SandboxOpt
         windowsHide: true,
       })
       child = proc
-      // 不因子进程句柄拖住宿主事件循环（测试进程/宿主退出时，子进程经 IPC disconnect 自清理）
+      // 不因子进程句柄拖住宿主事件循环（测试进程/宿主退出时，子进程经 IPC disconnect 自清理）。
+      //
+      // 注意：`child.unref()` **不会** unref IPC channel —— 实测（stdio 含 'ipc'）只调
+      // `unref()` 时父进程的事件循环会被 channel 撑住、进程永不退出；补上
+      // `channel.unref()` 才会干净退出。这个坑的后果很隐蔽：CI 上 `node --test`
+      // 全部用例通过后进程不退出，job 一直挂到被取消（实测挂了 63 分钟）。
       proc.unref()
+      ;(proc as { channel?: { unref?: () => void } }).channel?.unref?.()
 
       const initTimer = setTimeout(() => {
         failInit(new SourceScriptError('init', `音源 ${id} 初始化超时（>${initTimeoutMs}ms，未调用 lx.send("inited")）`))
