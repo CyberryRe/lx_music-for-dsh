@@ -2,14 +2,14 @@
   "$schema": "./docs/manifest.schema.json",
   "id": "lx-music-for-dsh",
   "name": "LX Music for DSH",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "为 LX Music 提供增强控制界面与 LLM 交互能力：侧边栏迷你播放卡片（含播放模式切换）、搜索/播放列表主窗口、音源与音质策略设置窗口、细粒度音乐工具集（music_search/play/playlist/prev/next/control）",
   "author": "dsh",
   "license": "Apache-2.0",
   "type": "plugin",
   "target": "web",
   "requires": {
-    "dsh": ">=0.1.5-rc.1"
+    "dsh": ">=0.1.7-rc.2"
   },
   "entry": {
     "host": "lib/index.js",
@@ -80,7 +80,7 @@
     "method": "node scripts/install-to-dsh.mjs —— npm pack + `dsh plugin --profile web add <tgz>`；包声明 dsh.bundle.patch，作为 profile 组合层自动激活（dsh >= 0.1.5-rc.1）。详见 docs/development.md §6"
   },
   "compatibility": {
-    "dsh": "@deepseek-ai/dsh 0.1.5-rc.1（运行时镜像包 0.1.5-rc.2）",
-    "previous": "1.0.0 面向 0.1.0-rc.6，需要手工在 profile cordis.patch.yml 写 insert 行；升级到 1.0.1 时必须删除该旧行，否则 duplicate loader entry id: lx-music"
+    "dsh": "@deepseek-ai/dsh 0.1.7-rc.2（桌面版内置运行时；运行时镜像包同为 0.1.7-rc.2）",
+    "previous": "1.0.1 面向 0.1.5-rc.1；0.1.7 移除了 Typert strict codec 的 `schema` 字段（改为 `create()`），旧 bundle 会在 `ctx.remote.$mount()` 抛 `strict codec has no create() factory`，因此 1.0.2 也是 client 面的破坏性适配：装 1.0.2 前请先升级 DSH 到 0.1.7"
   }
 }

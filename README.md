@@ -46,13 +46,19 @@ Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
 ## 快速开始
 
 ```bash
-npm install && node scripts/link-dsh.mjs   # 镜像全局 DSH 运行时（版本不一致会自动刷新）
+npm install && node scripts/link-dsh.mjs   # 镜像 DSH 运行时（版本不一致会自动刷新）
 npm run lint && npm run typecheck && npm run build && npm test
 # 可选：真实网络冒烟（五平台搜索）
 node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 ```
 
-安装到 DSH（要求 `@deepseek-ai/dsh` ≥ 0.1.5-rc.1）：
+`link-dsh.mjs` 优先用 `--from <dir>` / `$DSH_RUNTIME_DIR` 指定的树，否则用项目内
+`node_modules/@deepseek-ai/dsh`、再退回全局 npm 安装；并会读取桌面版 `app.asar` 的版本做
+**漂移防护**：镜像来源与桌面版不一致时**直接拒绝执行**（装错版本会静默把开发树换成错误的
+API 表面），确认要用就加 `--allow-drift`。桌面版 asar 内只有运行时 JS（`.d.ts` 已剥离），
+不能用于类型检查，所以只用于版本比对。
+
+安装到 DSH（要求 `@deepseek-ai/dsh` ≥ 0.1.7-rc.2）：
 
 ```bash
 node scripts/install-to-dsh.mjs            # 打包 + dsh plugin add + 旧版残留迁移校验
@@ -98,7 +104,7 @@ manifest.json     插件清单（元数据：入口、生命周期、工具、�
 src/index.ts      host 入口
 src/client.ts     client 入口
 src/ui/           React 组件
-tests/            单元测试（127 例）
+tests/            单元测试（131 例）
 docs/             开发文档 / DSH 与 LX Music 研读笔记
 ```
 
@@ -106,10 +112,23 @@ docs/             开发文档 / DSH 与 LX Music 研读笔记
 
 | 插件版本 | DSH 版本 |
 |---|---|
+| 1.0.2 | `@deepseek-ai/dsh@0.1.7-rc.2`（Typert strict codec 改为 `create()`；0.1.5 及更早**不兼容**） |
 | 1.0.1 | `@deepseek-ai/dsh@0.1.5-rc.1`（`dsh.bundle` 组合层，一条命令安装） |
 | 1.0.0 | `@deepseek-ai/dsh@0.1.0-rc.6`（需手工写 profile patch 行） |
 
-从 1.0.0 升级要处理两件事（第 2 件自动完成）：
+从 1.0.1 升级到 1.0.2 只需**先升级 DSH 到 0.1.7**，然后重装插件包（插件配置与
+`$DSH_HOME/storages/lx_music.json` 中的数据格式都没变）。
+
+0.1.7 的破坏性变更在 **client 面**：Typert 的 strict codec 不再暴露 `schema` 字段，改为
+`create(): TypertSchema` 在首次边界使用时现场物化（`dsh-api-gateway` 的 `decode()` 调
+`codec.create().parse(value)`，`dsh-typert-registry` 要求 `typeof codec.create === 'function'`）。
+1.0.1 那套 `{ mode, typeSymbol, schema }` 的 descriptor 会在 `ctx.remote.$mount()` 抛
+`strict codec has no create() factory`，导致整个 client 插件无法激活
+（GUI 报 `web boot: N entries did not activate`，侧边栏卡片直接不出现）。
+1.0.2 修好了这一处，并把手写 descriptor 的**类型**直接绑到 DSH 真实协议类型
+（`import type … from '@deepseek-ai/dsh-typert-protocol'`），协议再漂移会在 `tsc` 阶段暴露。
+
+从 1.0.0 升级到 1.0.1 要处理两件事（第 2 件自动完成）：
 
 1. 删掉 profile `cordis.patch.yml` 里手工 `insert` 的 `id: lx-music` 行
    （或用 `scripts/install-to-dsh.mjs` 自动迁移并备份），否则同一 id 会让 dsh 启动失败

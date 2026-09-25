@@ -19,7 +19,7 @@ lx_plugin/
 │   ├── compile-tests.mjs    # 测试编译（TypeScript API，输出 .test-dist）
 │   ├── smoke-live.mjs       # 可选：真实网络冒烟（五平台 SDK 搜索）
 │   ├── install-to-dsh.mjs   # 写入 DSH profile 插件行（幂等）
-│   └── link-dsh.mjs         # 从全局 DSH 安装树镜像 @deepseek-ai/* 运行时包
+│   └── link-dsh.mjs         # 镜像 DSH 运行时（显式来源/本地/全局）+ 桌面版版本漂移比对
 ├── src/
 │   ├── index.ts             # host 入口：Config / apply / storage domain
 │   ├── playback.ts          # PlaybackService（Typert Remote：播放权威状态，含播放模式）
@@ -51,10 +51,18 @@ lx_plugin/
 ```bash
 npm install          # 安装 devDependencies（--ignore-scripts 亦可）
 npm run setup        # 等价于 node scripts/link-dsh.mjs
-# 说明：@deepseek-ai/* 运行时包从全局 DSH 安装树
-# （%APPDATA%\npm\node_modules\@deepseek-ai\dsh\node_modules）镜像到本地 node_modules，
-# 保证开发/测试与 DSH 运行时版本一致（当前：@deepseek-ai/dsh@0.1.5-rc.1）。
-# 脚本会比对版本号：镜像过期的包自动重拷，升级全局 dsh 后重跑本脚本即可。
+# 说明：@deepseek-ai/* 运行时包从已安装的 DSH 依赖树镜像到本地 node_modules，
+# 保证开发/测试与 DSH 运行时版本一致（当前：@deepseek-ai/dsh@0.1.7-rc.2）。
+# 来源优先级：--from <dir> / $DSH_RUNTIME_DIR → 项目内 node_modules/@deepseek-ai/dsh
+# → 全局 npm 安装树；脚本按版本号比对，镜像过期的包自动重拷、来源已不再提供的包自动
+# 清理（--no-prune 关闭；--force 强制重镜像 @deepseek-ai/*）。
+#
+# 版本漂移防护：脚本还会从桌面版的 resources/app.asar 读出实际运行的 DSH 版本并与镜像
+# 来源比对 —— 二者不一致就**拒绝执行**（--allow-drift 跳过），因为镜像会覆盖/清理
+# @deepseek-ai/*，用错版本等于把开发树静默换成另一套 API 表面。桌面版 asar 里只有运行时
+# JS（.d.ts 已剥离），无法用于类型检查，因此**镜像来源必须是 npm 发布的依赖树**；
+# asar 只作为"应用实际跑的是哪个版本"的裁判。桌面版装在非默认目录时用
+# `--asar <path>` 或 $DSH_DESKTOP_ASAR 指定。
 ```
 
 要求：Node ≥ 20（测试建议 Node 24，`node --test` 支持 `--test-isolation`）。
@@ -66,9 +74,10 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | 命令 | 说明 |
 |---|---|
 | `npm run build` | 构建 `lib/index.js`（host）与 `lib/client.js`（client bundle） |
+| `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（127 例） |
+| `npm test` | 编译并运行全部单元测试（131 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -127,10 +136,14 @@ npm run pack        # 生成 lx-music-for-dsh-<version>.tgz
 
 ## 6. 安装到 DSH（web 模式）
 
-> 适用 **@deepseek-ai/dsh ≥ 0.1.5-rc.1**。该版本起插件包用 `dsh.bundle.patch` 声明自己是
+> 适用 **@deepseek-ai/dsh ≥ 0.1.7-rc.2**。该版本起插件包用 `dsh.bundle.patch` 声明自己是
 > 一个 profile 组合层，`dsh plugin add` 会自动激活，**不再需要手工编辑 profile 的
 > cordis.patch.yml**（0.1.0-rc.6 时代的手工行在本版本会导致
 > `duplicate loader entry id: lx-music`，dsh 直接拒绝启动）。
+>
+> **0.1.5 及更早不要安装 1.0.2**：0.1.7 移除了 Typert strict codec 的 `schema` 字段
+> （改为 `create()`），1.0.2 的 client 面按新契约书写，旧 DSH 会在 `$mount` 抛
+> `strict codec has no create() factory`。反之 1.0.1 的 bundle 在 0.1.7 上同样无法激活。
 
 ### 6.1 常规安装（一条命令）
 
@@ -153,7 +166,7 @@ node scripts/install-to-dsh.mjs --dry-run       # 只看会做什么
 
 ```bash
 npm run pack
-dsh plugin --profile web add D:\deepseek_harness\lx_plugin\dist\lx-music-for-dsh-1.0.1.tgz
+dsh plugin --profile web add D:\deepseek_harness\lx_plugin\dist\lx-music-for-dsh-1.0.2.tgz
 ```
 
 重启 `dsh web`，刷新浏览器：
@@ -250,6 +263,9 @@ npm test
 #   engine        音源脚本沙箱（加载/调用/超时/错误/工具函数）、引擎调度（轮询/降级/排序）、
 #                 音源管理（上传/启停/删除/校验）、本地持久化、SDK 结果规范化、
 #                 DomainSourceStore 旧文件存储一次性合并
+#   remote-contribution  client 面契约：每个 strict codec 都提供 0.1.7 要求的 create()
+#                 且不再暴露 schema、create() 可解析且记忆化、descriptor 通过 wire 层
+#                 校验规则、与 PlaybackService 的 @Remote 方法双向一致（方法名 + 形参个数）
 #   host.integration  apply 全流程（服务注册/工具集注册/搜索→直链→播放/限流）、
 #                 storage domain schema 与写入形状一致性
 ```
@@ -267,7 +283,8 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（127 例，运行在镜像的 0.1.5-rc.1 运行时上）
+- [ ] `npm test` 全部通过（131 例，运行在镜像的 0.1.7-rc.2 运行时上）
+- [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）
 - [ ] `dsh --profile <p> --dump-config` 中 `lx-music` 行只出现一次，且 profile 覆盖生效
@@ -287,10 +304,42 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 
 | 插件版本 | DSH 版本 | 说明 |
 |---|---|---|
+| 1.0.2 | `@deepseek-ai/dsh@0.1.7-rc.2` | **client 面契约适配**：Typert strict codec 的 `schema` → `create()`；descriptor 类型改绑 DSH 真实协议类型；`link-dsh.mjs` 支持显式来源 + 桌面版版本漂移比对 |
 | 1.0.1 | `@deepseek-ai/dsh@0.1.5-rc.1`（随包依赖 `*-0.1.5-rc.2`） | 声明 `dsh.bundle.patch`，`dsh plugin add` 一条命令激活；`dsh.client.inject` 修正为现存包；client externals 对齐 0.1.5 基线模块表；**修复 storage domain schema 导致的持久化静默失效** |
 | 1.0.0 | `@deepseek-ai/dsh@0.1.0-rc.6` | 需要手工在 profile `cordis.patch.yml` 里 insert 插件行 |
 
-### 10.1 升级到 1.0.1 必须处理的两件事
+### 10.1 升级到 1.0.2：client 面的 strict codec 契约变了
+
+**先升 DSH 再升插件**（0.1.5 及更早不要装 1.0.2，反之 1.0.1 在 0.1.7 上也起不来）。
+
+0.1.7 的 Typert 协议把 strict codec 从 `{ mode, typeSymbol, schema }` 改成
+`{ mode, typeSymbol, create(): TypertSchema }`：
+
+| 位置 | 0.1.5 | 0.1.7 |
+|---|---|---|
+| 消费 codec | `codec.schema.parse(value)` | `codec.create().parse(value)` |
+| 校验 codec | `typeof codec.schema.parse === 'function'` | `typeof codec.create === 'function'` |
+| 类型定义 | `readonly schema: TypertSchema` | `readonly create: () => TypertSchema`（`schema` 已移除） |
+
+失败模式很隐蔽：`ctx.remote.$mount(LXP_REMOTE_CONTRIBUTION)` 在 **client 侧**
+`typert.remotes.register` 的 `validateCodec` 抛 `strict codec has no create() factory`，
+`apply` 中止 → 该 client 行未激活 → DSH shell 直接以
+`web boot: N entries did not activate` 失败（或侧边栏卡片不出现）。**host 端完全正常**，
+所以只看 host 日志会误判为"插件没问题"。
+
+1.0.2 的三处改动：
+
+1. `src/ui/remoteContribution.ts` 用 `strictCodec()` 工厂产出 `create()`（惰性 + 记忆化，
+   schema 只在首次边界使用时物化 —— 协议要求 schema 来自 bundle 自己的 zod realm）；
+2. 同一个文件的 descriptor 类型改为 **直接引用 DSH 真实协议类型**
+   （`import type { InvocationDescriptor, TypertCodec, … } from '@deepseek-ai/dsh-typert-protocol'`）。
+   该 `import type` 会被完全擦除（构建产物里只剩注释），因此不会进 client bundle、也不需要
+   写进 `dsh.client.external`；但形状漂移从此会在 `tsc` 阶段报错，而不是等到浏览器里 `$mount` 失败；
+3. `tests/remote-contribution.test.ts` 锁定 codec 契约，并交叉校验 client 面与
+   `PlaybackService` 的 `@Remote` 方法**双向一致**（方法名集合 + 形参个数），
+   避免以后加 `@Remote` 方法忘了同步 client 面（wire 会以 `rejected <param>` / 找不到端点失败）。
+
+### 10.2 升级到 1.0.1 必须处理的两件事
 
 **1) 删除 profile 里遗留的手工插件行。**
 1.0.0 靠手工在 `cordis.patch.yml` 里 `insert` 一条 `id: lx-music`。1.0.1 起该行由包内
@@ -325,10 +374,11 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 `storage: memory` 表示 storage domain 打开失败（状态不会持久化）—— 1.0.1 起这条降级同时写
 `ctx.logger` 与 stderr，不再静默；排查时看启动终端的完整错误堆栈。
 
-### 10.2 回归覆盖
+### 10.3 回归覆盖
 
 | 测试 | 锁定的行为 |
 |---|---|
+| `tests/remote-contribution.test.ts` | strict codec 必须提供 `create()`（且不暴露 `schema`）、`create()` 产出可 `parse` 且记忆化、descriptor 通过 wire 校验规则、client 面与 `@Remote` 方法双向一致 |
 | `tests/source-store.test.ts` → `DomainSourceStore` 用例 | 旧文件存储一次性合并（采纳缺失/更新的记录、保留 domain 新版本、顺序、改名标记、不传 `legacyFile` 时不合并） |
 | `tests/host.integration.test.ts` → `storage domain schema 与写入形状一致` | `source_order` 记录是裸 `string[]`（对象形状必须被拒）、`global` 保留 `playMode`、`sources` 记录字段 |
 | `scripts/browser-smoke.mjs` | GUI 能启动（任一 client 行未激活即整体失败）、卡片出现、主窗口打开、`setPlayMode` 参数化 Remote 往返、设置窗口加载音源列表 |

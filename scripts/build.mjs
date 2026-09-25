@@ -14,6 +14,9 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const pkgName = pkg.name
 
+/** UTF-8 byte size: `code.length` counts UTF-16 units and under-reports CJK text. */
+const byteSize = (code) => Buffer.byteLength(code, 'utf8')
+
 const HOST_EXTERNALS = [/^@deepseek-ai\//, /^zod$/, /^schemastery$/, /^node:/]
 // @deepseek-ai/dsh 0.1.5-rc.1 的客户端「静态模块表」（dsh-web-frontend 启动时
 // 用 by() 冻结并交给 ClientModuleSystem 作为 staticModules 种子）。这张表里的
@@ -71,7 +74,7 @@ async function buildHost() {
   await bundle.close()
   mkdirSync(join(root, 'lib'), { recursive: true })
   writeFileSync(join(root, 'lib/index.js'), output[0].code)
-  console.log(`[build] lib/index.js (${output[0].code.length} bytes)`)
+  console.log(`[build] lib/index.js (${byteSize(output[0].code)} bytes)`)
 }
 
 async function buildClient() {
@@ -99,7 +102,7 @@ var exports = module.exports;
   await bundle.close()
   mkdirSync(join(root, 'lib'), { recursive: true })
   writeFileSync(join(root, 'lib/client.js'), output[0].code)
-  console.log(`[build] lib/client.js (${output[0].code.length} bytes)`)
+  console.log(`[build] lib/client.js (${byteSize(output[0].code)} bytes)`)
 }
 
 /** 音源脚本隔离子进程（runner）：独立 CJS 产物 lib/runner.cjs，仅供 spawn 执行。 */
@@ -117,7 +120,7 @@ async function buildRunner() {
   await bundle.close()
   mkdirSync(join(root, 'lib'), { recursive: true })
   writeFileSync(join(root, 'lib/runner.cjs'), output[0].code)
-  console.log(`[build] lib/runner.cjs (${output[0].code.length} bytes)`)
+  console.log(`[build] lib/runner.cjs (${byteSize(output[0].code)} bytes)`)
 }
 
 if (process.argv.includes('--watch')) {
