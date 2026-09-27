@@ -32,6 +32,14 @@ export interface EntityDelta {
   /** 可解释文案，用于 UI 与工具输出（"完整播放" / "15 秒内切走（AI 放的）"）。 */
   reason: string
   provenance: TasteProvenance
+  /**
+   * 是否计入样本量（plays/skips）。
+   *
+   * 只有**真实的收听行为**与**显式表态**才算样本；"加入列表/明确点歌"是意图而不是收听，
+   * 若计入会让"往列表加 3 首"显示成"播放 3 次"，并让置信度门控虚高。
+   * 缺省（undefined）视为计入，这样结算类信号不必逐条标注。
+   */
+  sample?: boolean
 }
 
 /** 信号权重表（全部可配；这里是默认值）。 */
@@ -186,7 +194,7 @@ export function settlePlaySession(session: PlaySession): EntityDelta[] {
   return deltas
 }
 
-/** 播放意图（加入列表 / 明确点歌）产生的信号。 */
+/** 播放意图（加入列表 / 明确点歌）产生的信号。这些都是**意图**，不计入样本量。 */
 export function intentDeltas(options: {
   trackKey: string
   artistKey: string
@@ -195,14 +203,14 @@ export function intentDeltas(options: {
   ts: number
 }): EntityDelta[] {
   const deltas: EntityDelta[] = [
-    { kind: 'track', key: options.trackKey, signal: SIGNAL.queued, reason: '加入播放列表', provenance: 'implicit' },
+    { kind: 'track', key: options.trackKey, signal: SIGNAL.queued, reason: '加入播放列表', provenance: 'implicit', sample: false },
   ]
   if (options.origin === 'user') {
-    deltas.push({ kind: 'track', key: options.trackKey, signal: SIGNAL.intent, reason: '用户明确点歌', provenance: 'implicit' })
-    deltas.push({ kind: 'artist', key: options.artistKey, signal: SIGNAL.intent, reason: '用户明确点歌', provenance: 'implicit' })
+    deltas.push({ kind: 'track', key: options.trackKey, signal: SIGNAL.intent, reason: '用户明确点歌', provenance: 'implicit', sample: false })
+    deltas.push({ kind: 'artist', key: options.artistKey, signal: SIGNAL.intent, reason: '用户明确点歌', provenance: 'implicit', sample: false })
   }
   if (options.source) {
-    deltas.push({ kind: 'tag', key: platformTag(options.source), signal: SIGNAL.queued, reason: '命中的平台', provenance: 'implicit' })
+    deltas.push({ kind: 'tag', key: platformTag(options.source), signal: SIGNAL.queued, reason: '命中的平台', provenance: 'implicit', sample: false })
   }
   return deltas
 }
@@ -226,7 +234,7 @@ export function explicitDelta(options: {
   }
 }
 
-/** 搜索后没选任何结果就改 query → 对平台/来源的负反馈。 */
+/** 搜索后没选任何结果就改 query → 对平台/来源的负反馈（不是收听行为，不计样本）。 */
 export function searchMissDelta(source: string): EntityDelta {
-  return { kind: 'tag', key: platformTag(source), signal: SIGNAL.searchMiss, reason: '搜索后未选就改 query', provenance: 'implicit' }
+  return { kind: 'tag', key: platformTag(source), signal: SIGNAL.searchMiss, reason: '搜索后未选就改 query', provenance: 'implicit', sample: false }
 }

@@ -9,8 +9,10 @@ import { PlaybackService, adaptDomain } from './playback'
 import { registerMusicTools } from './tools'
 import { SlidingWindowRateLimiter } from './ratelimit'
 import { DEFAULT_SETTINGS, type PluginSettings } from './shared/types'
-import { memoryConfigSchema } from './taste/config'
+import { memoryConfigSchema, normalizeMemoryConfig } from './taste/config'
 import { storedArtistSchema, storedTagSchema, storedTrackSchema, tasteEventDaySchema, tasteStateSchema } from './taste/schema'
+import { TasteStore } from './taste/store'
+import { TasteRecorder } from './taste/recorder'
 import { defaultDomainFile, migrateLegacyDomain } from './storage/migrate'
 
 export const name = 'lx-music-for-dsh'
@@ -173,11 +175,31 @@ export async function apply(ctx: {
     console.error('[lx-music-for-dsh] storageDomain 服务不可用，本次运行播放列表/设置不会持久化')
   }
 
+  // 音乐画像：store（持久化）+ recorder（捕获）。默认开启，用户可在首启引导里关闭。
+  const memory = normalizeMemoryConfig((storage?.global.get() as { memory?: unknown } | undefined)?.memory)
+  let recorder: TasteRecorder | undefined
+  if (storage && memory.enabled) {
+    const tasteStore = new TasteStore(storage, {
+      onWarn: (msg, err) => {
+        logger.warn(msg, err)
+      },
+    })
+    recorder = new TasteRecorder({
+      store: tasteStore,
+      halfLifeDays: memory.halfLifeDays,
+      exploreRatio: memory.exploreRatio,
+      onWarn: (msg, err) => {
+        logger.warn(msg, err)
+      },
+    })
+  }
+
   // 播放服务（Typert Remote：lxPlayback）
   const service = new PlaybackService(ctx as never, {
     storage,
     settings,
     rateLimiter,
+    ...(recorder ? { taste: recorder } : {}),
     onSettingsChange: (s) => {
       // rateLimitPerMinute 变更 → 重建限流器
       if (s.rateLimitPerMinute !== settings.rateLimitPerMinute) {
@@ -196,9 +218,12 @@ export async function apply(ctx: {
   // LLM 音乐工具集（细粒度：搜索/播放/播放列表/上下首/控制 + 兼容 search_and_play）
   registerMusicTools(ctx, { service })
 
-  // 插件卸载时释放音源子进程（避免孤儿进程）
+  // 插件卸载时释放音源子进程（避免孤儿进程）并结算当前画像会话
   const disposeHook = (ctx as { on?: (event: string, fn: () => void) => void }).on
-  disposeHook?.('dispose', () => service.disposeProvider())
+  disposeHook?.('dispose', () => {
+    recorder?.flush()
+    service.disposeProvider()
+  })
 
   // ctx.logger 的去向由宿主决定（可能被日志级别过滤），启动行同时写 stdout，
   // 便于按 docs/development.md §4.1 在启动 dsh 的终端直接确认插件是否加载。

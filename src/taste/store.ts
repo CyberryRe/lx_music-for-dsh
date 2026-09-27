@@ -366,7 +366,16 @@ export class TasteStore {
       ...(input.replayed !== undefined ? { replayed: input.replayed } : {}),
       ...(input.context ? { context: input.context } : {}),
       ...(input.deltas && input.deltas.length > 0
-        ? { deltas: input.deltas.map((d) => ({ kind: d.kind, key: d.key, signal: d.signal, reason: d.reason, provenance: d.provenance as TasteProvenance })) }
+        ? {
+            deltas: input.deltas.map((d) => ({
+              kind: d.kind,
+              key: d.key,
+              signal: d.signal,
+              reason: d.reason,
+              provenance: d.provenance as TasteProvenance,
+              ...(d.sample === false ? { sample: false } : {}),
+            })),
+          }
         : {}),
     }
     const events = [...day.events, record]

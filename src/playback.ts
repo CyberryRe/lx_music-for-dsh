@@ -79,6 +79,21 @@ export function pickQuality(music: MusicInfo, settings: PluginSettings, explicit
   return settings.qualityFallbackChain[0] ?? settings.defaultQuality ?? '128k'
 }
 
+/**
+ * 画像录制钩子（由 taste/recorder.ts 实现）。
+ *
+ * playback 只依赖这个**窄接口**：既避免 host 入口与 taste 模块循环依赖，也让
+ * "画像坏了不影响放歌"这条约束在类型层面成立（所有方法都不返回 Promise、不抛错）。
+ */
+export interface TasteHooks {
+  activeSession(): unknown
+  notePlay(music: MusicInfo | null, options?: { quality?: string }): void
+  noteProgress(progress: number, duration: number, status: PlaybackStatus): void
+  noteFinished(): void
+  noteIntent(musics: readonly MusicInfo[]): void
+  noteRemoved(): void
+}
+
 export interface PlaybackServiceOptions {
   /** 持久化存储（可选：不提供则仅内存）。 */
   storage?: StorageFace
@@ -90,6 +105,8 @@ export interface PlaybackServiceOptions {
   onLog?: (entry: PlayLogEntry) => void
   /** 限流器（tools 使用；service 内部持有引用）。 */
   rateLimiter?: { tryConsume(now?: number): RateLimitStatus; reset(): void }
+  /** 画像录制钩子（1.2.0；不提供则完全不录制）。 */
+  taste?: TasteHooks
   now?: () => number
 }
 
@@ -102,6 +119,7 @@ export class PlaybackService extends TypertRemoteService {
   private readonly storage?: StorageFace
   private readonly onSettingsChange?: (s: PluginSettings) => void
   private readonly onLog?: (e: PlayLogEntry) => void
+  private readonly taste?: TasteHooks
   readonly rateLimiter?: PlaybackServiceOptions['rateLimiter']
   private readonly now: () => number
   private persistTimer: ReturnType<typeof setTimeout> | null = null
@@ -112,6 +130,7 @@ export class PlaybackService extends TypertRemoteService {
     this.storage = options.storage
     this.onSettingsChange = options.onSettingsChange
     this.onLog = options.onLog
+    this.taste = options.taste
     this.rateLimiter = options.rateLimiter
     this.now = options.now ?? Date.now
     this.settings = { ...DEFAULT_SETTINGS, ...options.settings }
@@ -241,6 +260,7 @@ export class PlaybackService extends TypertRemoteService {
   @Remote('play')
   play(req: { index?: number }): PlayerState {
     const index = req.index
+    const switching = index !== undefined && index !== this.state.currentIndex
     if (index !== undefined) {
       if (index < 0 || index >= this.state.playlist.length) throw new Error(`索引越界: ${index}`)
       this.state.currentIndex = index
@@ -253,6 +273,11 @@ export class PlaybackService extends TypertRemoteService {
     }
     this.state.current = this.state.playlist[this.state.currentIndex] ?? null
     this.state.status = 'playing'
+    // 画像录制：切歌或首次开始才开新会话（pause 后 resume 不重开会话，否则进度会被清零、
+    // 而且一次连续收听会被拆成多段）。同一首再次点按由 recorder 记为"重播"。
+    if (this.taste && (switching || !this.taste.activeSession())) {
+      this.taste.notePlay(this.state.current, { quality: this.state.quality })
+    }
     this.bump()
     this.schedulePersist()
     return this.state
@@ -296,6 +321,8 @@ export class PlaybackService extends TypertRemoteService {
         // 顺序播放到末尾：停止（保持当前曲目，进度置为末尾）
         this.state.status = 'stoped'
         this.state.progress = this.state.duration
+        // 画像录制：这是"正常放完"，不是被切走
+        this.taste?.noteFinished()
         this.bump()
         this.schedulePersist()
         return this.state
@@ -367,6 +394,8 @@ export class PlaybackService extends TypertRemoteService {
     this.state.progress = typeof p.progress === 'number' ? p.progress : this.state.progress
     this.state.duration = typeof p.duration === 'number' && p.duration > 0 ? p.duration : this.state.duration
     if (p.status) this.state.status = p.status
+    // 画像录制：高频回调只更新内存里的最大播放时长；播到末尾才结算（不落库、不写盘）
+    this.taste?.noteProgress(this.state.progress, this.state.duration, this.state.status)
   }
 
   // ── Remote: 播放列表管理 ──────────────────────────────────────────────────
@@ -389,6 +418,8 @@ export class PlaybackService extends TypertRemoteService {
       this.state.current = playlist[this.state.currentIndex] ?? null
       this.state.status = 'paused'
     }
+    // 画像录制：意图信号（排队 +0.2；用户明确点歌额外 +1.0），且不改变会话
+    this.taste?.noteIntent(musics)
     this.bump()
     this.schedulePersist()
     return this.state
@@ -405,6 +436,8 @@ export class PlaybackService extends TypertRemoteService {
       this.state.currentIndex = playlist.length > 0 ? Math.min(idx, playlist.length - 1) : -1
       this.state.current = this.state.currentIndex >= 0 ? playlist[this.state.currentIndex]! : null
       if (this.state.currentIndex < 0) this.state.status = 'stoped'
+      // 画像录制：移除了正在播的那首（只听过一小段就当没听过，避免"清理列表"被算成不喜欢）
+      this.taste?.noteRemoved()
     }
     this.bump()
     this.schedulePersist()
@@ -419,6 +452,8 @@ export class PlaybackService extends TypertRemoteService {
     this.state.status = 'stoped'
     this.state.progress = 0
     this.state.duration = 0
+    // 画像录制：清空列表等于当前会话结束（只听过一小段就不记负反馈）
+    this.taste?.noteRemoved()
     this.bump()
     this.schedulePersist()
     return this.state

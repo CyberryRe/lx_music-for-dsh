@@ -141,6 +141,18 @@ describe('意图 / 显式表态 / 搜索失败', () => {
     expect(ai.every((d) => d.signal === SIGNAL.queued)).toBe(true)
   })
 
+  it('意图信号不计入样本量（否则"加 3 首"会显示成"播放 3 次"）', () => {
+    const user = intentDeltas({ trackKey: 'a|b', artistKey: 'b', origin: 'user', source: 'tx', ts: 0 })
+    expect(user.every((d) => d.sample === false)).toBe(true)
+    const ai = intentDeltas({ trackKey: 'a|b', artistKey: 'b', origin: 'ai', ts: 0 })
+    expect(ai.every((d) => d.sample === false)).toBe(true)
+    // 结算类信号不标 sample（缺省即计入）
+    const settled = settlePlaySession(session({ playedRatio: 1 }))
+    expect(settled.every((d) => d.sample === undefined)).toBe(true)
+    // 搜索失败也不是收听行为
+    expect(searchMissDelta('wy').sample).toBe(false)
+  })
+
   it('显式表态走 explicit 通道，且幅度大于最强隐式信号', () => {
     const like = explicitDelta({ kind: 'artist', key: '金玟岐', liked: true, provenance: 'explicit-chat' })
     expect(like.provenance).toBe('explicit-chat')

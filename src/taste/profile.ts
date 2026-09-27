@@ -71,14 +71,17 @@ export function applyDeltas(
     const decayed = base.implicit * decayFactor(options.now - base.lastTs, options.halfLifeDays)
     const explicit = delta.provenance === 'implicit' ? base.explicit : base.explicit + delta.signal
     const implicit = delta.provenance === 'implicit' ? decayed + delta.signal : decayed
+    // 样本量只统计真实收听与显式表态（`sample: false` 的意图类信号不算，
+    // 否则"往列表加 3 首"会显示成"播放 3 次"并把置信度门控抬虚）
+    const isSample = delta.sample !== false
     const isNegative = delta.signal < 0
     next[delta.key] = {
       ...base,
       raw: base.raw ?? options.raw?.(delta),
       implicit: round(implicit),
       explicit: round(explicit),
-      plays: base.plays + (isNegative ? 0 : 1),
-      skips: base.skips + (isNegative ? 1 : 0),
+      plays: base.plays + (isSample && !isNegative ? 1 : 0),
+      skips: base.skips + (isSample && isNegative ? 1 : 0),
       lastTs: options.now,
       updatedAt: options.now,
     }

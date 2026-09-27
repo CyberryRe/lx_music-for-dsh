@@ -67,6 +67,8 @@ export const entityDeltaSchema = zod.object({
   signal: zod.number(),
   reason: zod.string(),
   provenance: zod.enum(['implicit', 'explicit-chat', 'explicit-ui']),
+  /** 是否计入样本量（意图类信号为 false）。 */
+  sample: zod.boolean().optional(),
 })
 
 /** 一条原始事件（终态结算的输入 + 结算结果，事件流是唯一真源）。 */
