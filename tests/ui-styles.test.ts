@@ -55,6 +55,51 @@ describe('CSS 约定：按钮不能被挤成竖排文字', () => {
   })
 })
 
+describe('CSS 约定：侧边栏小卡片不能被长文本撑破', () => {
+  it('.lxm-card 显式允许被压缩到容器宽度（max-width/min-width/overflow）', () => {
+    const body = ruleBody(CSS, '.lxm-card') ?? ''
+    // 根因：卡片是侧边栏里的 flex/grid 子项，没有这几条时，一段不带空格的长文本
+    // （最典型是报错信息，含 URL/JSON）会把卡片撑出侧边栏、盖住设置入口。
+    expect(/max-width:\s*100%/.test(body)).toBe(true)
+    expect(/min-width:\s*0/.test(body)).toBe(true)
+    expect(/overflow:\s*hidden/.test(body)).toBe(true)
+    expect(/box-sizing:\s*border-box/.test(body)).toBe(true)
+  })
+
+  it('.lxm-error 换行而不是撑宽（anywhere + 两行截断）', () => {
+    const body = ruleBody(CSS, '.lxm-error')
+    expect(body).toBeDefined()
+    const text = body ?? ''
+    expect(/overflow-wrap:\s*anywhere/.test(text)).toBe(true)
+    expect(/max-width:\s*100%/.test(text)).toBe(true)
+    expect(/overflow:\s*hidden/.test(text)).toBe(true)
+    // 两行截断：完整内容靠 title 提示，避免报错把卡片撑高到挤掉控制按钮
+    expect(/-webkit-line-clamp:\s*2/.test(text)).toBe(true)
+    // 报错不能被单行省略号吞掉（那正是这次的问题：塞在 .lxm-singer 里看不见）
+    expect(/white-space:\s*nowrap/.test(text)).toBe(false)
+  })
+
+  it('卡片标题链路上的每个祖先都能收缩（省略号才生效）', () => {
+    expect(/min-width:\s*0/.test(ruleBody(CSS, '.lxm-card-head') ?? '')).toBe(true)
+    expect(/min-width:\s*0/.test(ruleBody(CSS, '.lxm-title') ?? '')).toBe(true)
+  })
+})
+
+describe('小卡片的报错渲染', () => {
+  const source = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'Card.tsx'), 'utf8')
+
+  it('报错渲染在独立的 .lxm-error 行里，并带完整内容的 title', () => {
+    expect(source).toContain('className="lxm-error"')
+    expect(source).toContain('title={errorText}')
+  })
+
+  it('不再把原始报错当作 .lxm-singer 的可见文本（会被省略号吞掉）', () => {
+    // `.lxm-singer` 里只允许出现简短的「连接失败」占位
+    expect(source).not.toContain("(snapshot.error ?? '连接中…')")
+    expect(source).toContain("'连接失败'")
+  })
+})
+
 describe('「我的口味」窗口的按钮用法', () => {
   /** 读取源码（测试跑在 .test-dist/tests 下，源码仍在仓库里）。 */
   const source = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'TasteWindow.tsx'), 'utf8')

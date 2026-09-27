@@ -44,6 +44,9 @@ export function LxMusicCard(props: CardProps): JSX.Element {
   const playIcon = playing ? '⏸' : '▶'
   const title = current ? `${current.name} - ${current.singer}` : 'LX Music'
   const cover = current?.meta.picUrl
+  // 报错单独占一行（换行 + 两行截断 + title 提示完整内容）：直接塞进歌手里会因为
+  // 单行省略号而看不到内容，而它偏偏是最需要被看见的文字。
+  const errorText = !current && snapshot.error ? snapshot.error : null
 
   return (
     <div
@@ -61,7 +64,7 @@ export function LxMusicCard(props: CardProps): JSX.Element {
         <div className="lxm-title">
           <div className="lxm-name">{current?.name ?? '未在播放'}</div>
           <div className="lxm-singer" title={snapshot.error ?? undefined}>
-            {current?.singer ?? (snapshot.connected ? '播放列表为空' : (snapshot.error ?? '连接中…'))}
+            {current?.singer ?? (snapshot.connected ? '播放列表为空' : (errorText ? '连接失败' : '连接中…'))}
           </div>
         </div>
         <button
@@ -89,6 +92,12 @@ export function LxMusicCard(props: CardProps): JSX.Element {
           ⚙
         </button>
       </div>
+
+      {errorText && (
+        <div className="lxm-error" title={errorText}>
+          {errorText}
+        </div>
+      )}
 
       <div className="lxm-progress">
         <span className="lxm-time">{secondsToInterval(progress)}</span>

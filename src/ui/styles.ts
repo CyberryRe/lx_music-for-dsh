@@ -13,6 +13,14 @@ export const CSS = `
   border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.15));
   cursor: pointer;
   user-select: none;
+  /* 卡片是会话侧边栏里的 flex/grid 子项：**必须**允许被压缩到容器宽度。
+     否则一段长文本（最典型的是报错信息，含 URL/JSON 且没有空格）会把它撑出侧边栏，
+     覆盖住旁边的设置入口，导致用户连设置都点不到。 */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 .lxm-card:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.12)); }
 .lxm-card-head { display: flex; gap: 8px; align-items: center; min-width: 0; }
@@ -20,7 +28,7 @@ export const CSS = `
   width: 42px; height: 42px; border-radius: 8px; object-fit: cover; flex: none;
   background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.15));
 }
-.lxm-title { min-width: 0; flex: 1; }
+.lxm-title { min-width: 0; flex: 1; overflow: hidden; }
 .lxm-name {
   font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary, #e6e6e6);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -28,6 +36,17 @@ export const CSS = `
 .lxm-singer {
   font-size: 11px; color: var(--dsw-alias-label-tertiary, #999);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 报错信息单独一行：换行而不是撑宽卡片，最多两行，完整内容在 title 里。 */
+.lxm-error {
+  font-size: 11px; line-height: 1.4;
+  color: var(--dsw-alias-state-error-primary, #f56c6c);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #f56c6c) 10%, transparent);
+  border-radius: 6px;
+  padding: 4px 6px;
+  min-width: 0; max-width: 100%;
+  overflow-wrap: anywhere; word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .lxm-progress { display: flex; align-items: center; gap: 6px; }
 .lxm-progress input[type="range"] {

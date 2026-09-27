@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（357 例） |
+| `npm test` | 编译并运行全部单元测试（362 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -439,6 +439,7 @@ npm test    # = compile-tests + node --test --test-isolation=none --test-concurr
 #   taste-store    聚合落盘与排行、**seen/played 分离**（探索池的前提）、多平台引用与 Tier-1 直取、
 #                 事件按天分桶/单日上限/保留窗口裁剪、探索统计、一键清空，
 #                 以及**"store 真实写出的每条记录都能被 domain schema 接受"**（形状漂移的正面锁）
+#   ui-styles      按钮/卡片两条 CSS 约定：.lxm-btn 用 min-width + nowrap（不依赖父容器）、.lxm-btn-text 自带按钮框、TasteWindow 全部 	ype="button"；**.lxm-card 必须可被压缩（max-width/min-width/overflow）且报错用 .lxm-error 换行两行截断**（否则长报错会撑出侧边栏、盖住设置入口）
 #   storage-keys   **per-record 键必须 path-safe**：映射规则（直通/编码/单射/超长哈希）、
 #                 真实后端确实会拒绝 ISO 时间戳键（说明这一层不可省）、
 #                 含非法字符的旧数据"改名搁置 → 打开 → 显式迁移"能跑通且 global 逐项保留、
@@ -473,7 +474,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（357 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（362 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）
@@ -498,8 +499,10 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 
 - [ ] **升级不丢数据**：用一份真实的旧 `lx_music.json` 启动 → 播放列表/当前索引/音质/音量/静音/
       播放模式/设置**逐项与升级前一致**；`$DSH_HOME/storages/lx_music/` 目录出现（`global.json` +
-      各表目录），旧 `lx_music.json` **原样保留**
+      各表目录），旧 `lx_music.json` 已改名为 `lx_music.json.migrated-<时间戳>`（**不删**，可回滚）
 - [ ] 启动日志出现 `[lx-music-for-dsh] 旧存储已迁移到 per-record 布局：…`
+- [ ] **长报错不撑破侧边栏**（1.2.0 实测缺陷）：制造一条长报错（例如断开音源后搜索），卡片应把
+      报错**换行并两行截断**在卡片内，侧边栏宽度不变、设置/口味按钮仍可点（`title` 里有完整文本）
 - [ ] **坏记录不殉爆**：手工把 `lx_music/taste_tags/<某键>.json` 改成非法形状 → 重新加载插件后
       该文件被改名为 `.bak.<时间戳>`，插件照常可用（`storage: durable`）
 - [ ] 首次加载弹出「音乐口味记忆」引导页；「稍后再说」后 7 天内不再自动弹；「暂不使用」后
