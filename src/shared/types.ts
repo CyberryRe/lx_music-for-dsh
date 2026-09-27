@@ -344,3 +344,74 @@ export function secondsToInterval(total: number): string {
   const r = s % 60
   return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`
 }
+
+// ── 音乐画像（1.2.0）：host 门面与 client UI 共用的形状 ──────────────────────
+
+/** 画像配置在 UI 上的形状（与 host 侧 MemoryConfig 结构一致）。 */
+export interface MemoryConfigView {
+  enabled: boolean
+  onboardedAt?: string
+  snoozedUntil?: string
+  halfLifeDays: number
+  retainDays: number
+  budget: 'off' | 'minimal' | 'balanced' | 'rich'
+  semanticProfile: 'off' | 'local-only' | 'llm-assisted'
+  profileCallsPerHour: number
+  exploreRatio: number
+  migratedFrom?: string
+}
+
+export interface TasteArtistRow {
+  name: string
+  score: number
+  plays: number
+  skips: number
+  confidence: string
+  explicit: number
+}
+
+export interface TasteTrackRow {
+  title: string
+  artist: string
+  source: string
+  id: string
+  score: number
+  status: string
+  lastPlayedAt?: number
+}
+
+export interface TasteEventRow {
+  ts: number
+  kind: string
+  origin: string
+  mode: string
+  title: string
+  artist: string
+  playedRatio?: number
+  reasons: string[]
+}
+
+/** 画像视图（`lxPlayback.getTasteProfile` 的返回形状）。 */
+export interface TasteProfileView {
+  enabled: boolean
+  onboarded: boolean
+  snoozed: boolean
+  summary: string
+  artists: TasteArtistRow[]
+  tracks: TasteTrackRow[]
+  sampleSize: number
+  config: MemoryConfigView | null
+  exploreStats?: { replayPlays: number; replaySkips: number; explorePlays: number; exploreSkips: number; exploreRatio: number }
+}
+
+export interface TasteActionInput {
+  action: string
+  kind?: string
+  entity?: string
+  note?: string
+}
+
+export interface TasteActionResult {
+  ok: boolean
+  message: string
+}

@@ -6,47 +6,23 @@
 //     全部是可 headless 测试的纯逻辑，UI 只做渲染。
 
 import type { StorageFace } from '../playback'
-import type { MusicInfo, PlaybackStatus } from '../shared/types'
+import type {
+  MemoryConfigView,
+  MusicInfo,
+  PlaybackStatus,
+  TasteActionResult,
+  TasteActionInput,
+  TasteArtistRow,
+  TasteEventRow,
+  TasteProfileView,
+  TasteTrackRow,
+} from '../shared/types'
 import { normalizeMemoryConfig, type MemoryConfig } from './config'
 import type { TasteStore } from './store'
 import type { TasteRecorder } from './recorder'
 import type { StoredTrack } from './schema'
 import { explicitDelta } from './events'
 import { normalizeArtist } from './normalize'
-
-export interface TasteProfileView {
-  /** 画像总开关（关闭时所有读视图为空，写操作会被拒绝）。 */
-  enabled: boolean
-  /** 是否已完成首启引导（false 时客户端应自动弹引导页）。 */
-  onboarded: boolean
-  /** 是否处于"稍后再说"的静默期。 */
-  snoozed: boolean
-  summary: string
-  artists: Array<{ name: string; score: number; plays: number; skips: number; confidence: string; explicit: number }>
-  tracks: Array<{ title: string; artist: string; source: string; id: string; score: number; status: string; lastPlayedAt?: number }>
-  sampleSize: number
-  config: MemoryConfig
-  exploreStats?: { replayPlays: number; replaySkips: number; explorePlays: number; exploreSkips: number; exploreRatio: number }
-}
-
-export interface TasteEventView {
-  ts: number
-  kind: string
-  origin: string
-  mode: string
-  title: string
-  artist: string
-  playedRatio?: number
-  /** 这条事件产生的信号说明（UI 上显示"为什么"）。 */
-  reasons: string[]
-}
-
-export interface TasteActionRequest {
-  action: string
-  kind?: string
-  entity?: string
-  note?: string
-}
 
 export interface TasteFacadeDeps {
   store: TasteStore
@@ -64,6 +40,22 @@ export interface TasteFacadeDeps {
  *
  * 门控放在这里而不是接线时：用户关掉画像开关后立刻停止录制，不需要重启或重连。
  */
+/** MemoryConfig → UI 视图（形状一致；显式展开可选字段，避免 exactOptionalPropertyTypes 报错）。 */
+function toConfigView(memory: MemoryConfig): MemoryConfigView {
+  return {
+    enabled: memory.enabled,
+    halfLifeDays: memory.halfLifeDays,
+    retainDays: memory.retainDays,
+    budget: memory.budget,
+    semanticProfile: memory.semanticProfile,
+    profileCallsPerHour: memory.profileCallsPerHour,
+    exploreRatio: memory.exploreRatio,
+    ...(memory.onboardedAt ? { onboardedAt: memory.onboardedAt } : {}),
+    ...(memory.snoozedUntil ? { snoozedUntil: memory.snoozedUntil } : {}),
+    ...(memory.migratedFrom ? { migratedFrom: memory.migratedFrom } : {}),
+  }
+}
+
 export class TasteFacade {
   private readonly store: TasteStore
   private readonly recorder?: TasteRecorder
@@ -131,7 +123,7 @@ export class TasteFacade {
       artists: [],
       tracks: [],
       sampleSize: 0,
-      config: this.memory,
+      config: toConfigView(this.memory),
       ...(state.exploreStats ? { exploreStats: state.exploreStats } : {}),
     }
     if (!this.memory.enabled) {
@@ -140,7 +132,7 @@ export class TasteFacade {
 
     const artists = this.store.top('artist', { now: ts, halfLifeDays: this.memory.halfLifeDays, limit, includeNegative: true })
     const tracks = this.store.top('track', { now: ts, halfLifeDays: this.memory.halfLifeDays, limit, includeNegative: true })
-    const trackRows: TasteProfileView['tracks'] = []
+    const trackRows: TasteTrackRow[] = []
     for (const t of tracks) {
       const record = t as unknown as StoredTrack
       const ref = this.store.trackRef(t.key)
@@ -164,7 +156,7 @@ export class TasteFacade {
     return {
       ...base,
       summary,
-      artists: artists.map((a) => ({
+      artists: artists.map((a): TasteArtistRow => ({
         name: a.raw ?? a.key,
         score: a.score,
         plays: a.plays,
@@ -178,7 +170,7 @@ export class TasteFacade {
   }
 
   /** 最近事件（UI 的"证据"列表：让用户看到画像为什么长这样）。 */
-  events(limit = 20): TasteEventView[] {
+  events(limit = 20): TasteEventRow[] {
     const rows = this.store.readEvents({ now: this.now(), retainDays: this.memory.retainDays })
     return rows
       .slice(-Math.max(1, Math.min(200, limit)))
@@ -196,7 +188,7 @@ export class TasteFacade {
   }
 
   /** 写操作（like/dislike/forget/note/清空）。UI 与工具共用。 */
-  async action(req: TasteActionRequest): Promise<{ ok: boolean; message: string }> {
+  async action(req: TasteActionInput): Promise<TasteActionResult> {
     const ts = this.now()
     const action = req.action
     if (action === 'clear') {

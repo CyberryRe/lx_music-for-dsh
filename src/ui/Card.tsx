@@ -67,6 +67,18 @@ export function LxMusicCard(props: CardProps): JSX.Element {
         <button
           type="button"
           className="lxm-btn"
+          aria-label="我的口味"
+          title="我的口味（音乐画像）"
+          onClick={(e) => {
+            e.stopPropagation()
+            store.openTaste()
+          }}
+        >
+          ♪
+        </button>
+        <button
+          type="button"
+          className="lxm-btn"
           aria-label="设置"
           title="设置"
           onClick={(e) => {

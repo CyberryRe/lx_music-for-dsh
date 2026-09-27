@@ -5,6 +5,7 @@
 
 import type {
   AddPosition,
+  MemoryConfigView,
   MusicInfo,
   PlayMode,
   PlayerState,
@@ -13,6 +14,10 @@ import type {
   SearchOutcome,
   SearchRequest,
   SourceEntry,
+  TasteActionInput,
+  TasteActionResult,
+  TasteEventRow,
+  TasteProfileView,
 } from '../shared/types'
 
 /** client 侧 remote 接口（host PlaybackService 的镜像）。
@@ -48,6 +53,11 @@ export interface LxRemote {
   deleteSource(id: string): Promise<{ success: boolean; error?: string }>
   reorderSources(ids: string[]): Promise<{ success: boolean; error?: string }>
   getLogs(limit?: number): Promise<unknown[]>
+  // 音乐画像（1.2.0）
+  getTasteProfile(req: { view?: string; limit?: number; mood?: string }): Promise<TasteProfileView>
+  getTasteEvents(req: { limit?: number }): Promise<TasteEventRow[]>
+  tasteAction(req: TasteActionInput): Promise<TasteActionResult>
+  setMemoryConfig(req: { patch: Record<string, unknown> }): Promise<MemoryConfigView>
 }
 
 export interface StoreSnapshot {
@@ -56,6 +66,14 @@ export interface StoreSnapshot {
   sources: SourceEntry[]
   mainOpen: boolean
   settingsOpen: boolean
+  /** 「我的口味」窗口（首启引导也复用它）。 */
+  tasteOpen: boolean
+  taste: TasteProfileView | null
+  tasteEvents: TasteEventRow[]
+  /** 用户主动选择的标签页（引导 vs 口味管理）。 */
+  tasteOnboarding: boolean
+  tasteBusy: boolean
+  tasteNotice: string | null
   loading: boolean
   error: string | null
   connected: boolean
@@ -72,10 +90,18 @@ export class LxStore {
     sources: [],
     mainOpen: false,
     settingsOpen: false,
+    tasteOpen: false,
+    taste: null,
+    tasteEvents: [],
+    tasteOnboarding: false,
+    tasteBusy: false,
+    tasteNotice: null,
     loading: false,
     error: null,
     connected: false,
   }
+  /** 首启引导是否已经弹过（每个客户端会话只自动弹一次，避免每次刷新都打扰）。 */
+  private tastePrompted = false
   private listeners = new Set<() => void>()
   private audio: HTMLAudioElement | null = null
   private lastVersion = -1
@@ -163,8 +189,28 @@ export class LxStore {
       } else if (versionChanged) {
         this.applyStatus(state.status)
       }
+      void this.refreshTaste()
     } catch (err) {
       this.patch({ connected: false, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /**
+   * 拉取画像并决定是否自动弹首启引导。
+   *
+   * 自动弹的条件：画像开启 + 还没引导过 + 不在"稍后再说"的静默期 + 本会话还没弹过。
+   * 只在 refreshAll() 里调用（低频），不进轮询，避免每次同步都打一次远端。
+   */
+  async refreshTaste(): Promise<void> {
+    try {
+      const taste = await this.remote.getTasteProfile({ limit: 20 })
+      this.patch({ taste })
+      if (!this.tastePrompted && taste.enabled && !taste.onboarded && !taste.snoozed) {
+        this.tastePrompted = true
+        this.patch({ tasteOpen: true, tasteOnboarding: true })
+      }
+    } catch {
+      // 画像不可用（旧版 host / storage 未就绪）时静默忽略：不影响播放主流程
     }
   }
 
@@ -485,6 +531,58 @@ export class LxStore {
 
   closeSettings(): void {
     this.patch({ settingsOpen: false })
+  }
+
+  // ── 「我的口味」（含首启引导） ───────────────────────────────────────────
+
+  openTaste(options: { onboarding?: boolean } = {}): void {
+    this.patch({ tasteOpen: true, tasteOnboarding: options.onboarding ?? false, tasteNotice: null })
+    void this.refreshTaste()
+    void this.refreshTasteEvents()
+  }
+
+  closeTaste(): void {
+    this.patch({ tasteOpen: false })
+  }
+
+  async refreshTasteEvents(limit = 20): Promise<void> {
+    try {
+      const tasteEvents = await this.remote.getTasteEvents({ limit })
+      this.patch({ tasteEvents })
+    } catch {
+      // 画像不可用时静默
+    }
+  }
+
+  /** 画像写操作（like/dislike/forget/note/clear/onboard/snooze）。 */
+  async tasteAction(req: TasteActionInput): Promise<TasteActionResult> {
+    this.patch({ tasteBusy: true, tasteNotice: null })
+    try {
+      const result = await this.remote.tasteAction(req)
+      await this.refreshTaste()
+      await this.refreshTasteEvents()
+      this.patch({ tasteBusy: false, tasteNotice: result.message })
+      return result
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.patch({ tasteBusy: false, tasteNotice: `失败：${message}` })
+      return { ok: false, message }
+    }
+  }
+
+  /** 改画像配置（开关/保留期/预算档位/半衰期）。 */
+  async setMemoryConfig(patch: Record<string, unknown>): Promise<MemoryConfigView | null> {
+    this.patch({ tasteBusy: true, tasteNotice: null })
+    try {
+      const config = await this.remote.setMemoryConfig({ patch })
+      await this.refreshTaste()
+      this.patch({ tasteBusy: false, tasteNotice: '设置已保存' })
+      return config
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.patch({ tasteBusy: false, tasteNotice: `保存失败：${message}` })
+      return null
+    }
   }
 
   clearError(): void {
