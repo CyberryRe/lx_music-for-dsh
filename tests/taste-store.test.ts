@@ -9,7 +9,7 @@ import { domainSpec } from '../src/index'
 import type { StorageFace } from '../src/playback'
 import { MAX_EVENTS_PER_DAY, TasteStore, dayKey } from '../src/taste/store'
 import { explicitDelta, settlePlaySession, type EntityDelta } from '../src/taste/events'
-import type { StoredMusicInfo } from '../src/taste/schema'
+import type { MusicInfo } from '../src/shared/types'
 
 const DAY = 86_400_000
 const T0 = Date.UTC(2026, 0, 15, 12, 0, 0)
@@ -34,7 +34,7 @@ function fakeStorage(): StorageFace & { raw: Map<string, Map<string, unknown>> }
   }
 }
 
-const MUSIC_TX: StoredMusicInfo = {
+const MUSIC_TX: MusicInfo = {
   id: 'tx_0039MnYb0qxYhV',
   name: '晴天',
   singer: '周杰伦',
@@ -43,7 +43,7 @@ const MUSIC_TX: StoredMusicInfo = {
   meta: { songId: '0039MnYb0qxYhV', albumName: '叶惠美', strMediaMid: 'x' },
 }
 
-const MUSIC_WY: StoredMusicInfo = { ...MUSIC_TX, id: 'wy_186016', source: 'wy' }
+const MUSIC_WY: MusicInfo = { ...MUSIC_TX, id: 'wy_186016', source: 'wy' }
 
 const track = (trackKey: string, trackKeyArtist: string): EntityDelta[] =>
   settlePlaySession({

@@ -231,6 +231,18 @@ class NegatedExpect extends MiniExpect {
   override toContain(expected: unknown): void {
     if (typeof this.actual === 'string' && (this.actual as string).includes(String(expected))) fail(`不应包含 "${String(expected)}"`)
   }
+  override toBeNull(): void {
+    if (this.actual === null) fail('期望不是 null')
+  }
+  override toBeUndefined(): void {
+    if (this.actual === undefined) fail('期望不是 undefined')
+  }
+  override toBeTruthy(): void {
+    if (this.actual) fail('期望 falsy')
+  }
+  override toBeDefined(): void {
+    if (this.actual !== undefined) fail('期望 undefined')
+  }
 }
 
 /** 解析 Promise 的断言包装：expect(p).rejects.toMatchObject(...) / await expect(p).rejects... */

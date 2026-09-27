@@ -17,7 +17,6 @@ import {
 } from './events'
 import { currentPlayContext } from './origin'
 import type { TasteStore } from './store'
-import type { StoredMusicInfo } from './schema'
 
 /** 来源/情境三件套（与 origin.ts 的 PlayContext 结构一致，避免循环依赖所以这里再声明一次）。 */
 export interface PlayContextLike {
@@ -138,7 +137,7 @@ export class TasteRecorder {
         trackKey: key,
         title: music.name,
         artist: music.singer,
-        music: music as StoredMusicInfo,
+        music,
         played: false,
         ...(music.meta?.albumName ? { album: music.meta.albumName } : {}),
         ...(durationSec > 0 ? { durationSec } : {}),
@@ -286,7 +285,7 @@ export class TasteRecorder {
         trackKey: session.trackKey,
         title: session.title,
         artist: session.artist,
-        music: session.music as StoredMusicInfo,
+        music: session.music,
         played: listened,
         explored: session.mode === 'explore',
         resolved: listened,

@@ -8,6 +8,7 @@
 //   - 聚合：**按键随机访问**（排序、单条更新、遗忘某个艺人），所以一个实体一条记录。
 
 import type { StorageFace } from '../playback'
+import type { MusicInfo } from '../shared/types'
 import type { EntityDelta, TasteEntityKind, TasteEventKind, TasteEventMode, TasteEventOrigin, TasteProvenance } from './events'
 import { applyDeltas, pruneEvents, topEntities, type EntityTable, type ProfileEntity, type RankedEntity } from './profile'
 import {
@@ -256,7 +257,8 @@ export class TasteStore {
     trackKey: string
     title: string
     artist: string
-    music: StoredMusicInfo
+    /** 收口用业务类型（MusicInfo）；schema 推断类型只在表内部使用，避免各调用点强转。 */
+    music: MusicInfo
     album?: string
     durationSec?: number
     variant?: StoredTrack['variant']
@@ -272,7 +274,7 @@ export class TasteStore {
     const refs = { ...(existing?.refs ?? {}) }
     const previous = refs[input.music.source]
     refs[input.music.source] = {
-      music: input.music,
+      music: input.music as StoredMusicInfo,
       ...(previous?.lastOkAt !== undefined ? { lastOkAt: previous.lastOkAt } : {}),
       ...(input.resolved ? { lastOkAt: now, lastResolvedAt: now } : previous?.lastOkAt !== undefined ? { lastOkAt: previous.lastOkAt } : {}),
       ...(input.scriptName ? { lastScript: input.scriptName } : previous?.lastScript ? { lastScript: previous.lastScript } : {}),

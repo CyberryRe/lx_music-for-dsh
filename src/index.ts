@@ -13,6 +13,7 @@ import { memoryConfigSchema, normalizeMemoryConfig } from './taste/config'
 import { storedArtistSchema, storedTagSchema, storedTrackSchema, tasteEventDaySchema, tasteStateSchema } from './taste/schema'
 import { TasteStore } from './taste/store'
 import { TasteRecorder } from './taste/recorder'
+import { TasteFacade } from './taste/facade'
 import { registerTasteTools } from './taste/tools'
 import { defaultDomainFile, migrateLegacyDomain } from './storage/migrate'
 
@@ -176,11 +177,13 @@ export async function apply(ctx: {
     console.error('[lx-music-for-dsh] storageDomain 服务不可用，本次运行播放列表/设置不会持久化')
   }
 
-  // 音乐画像：store（持久化）+ recorder（捕获）。默认开启，用户可在首启引导里关闭。
+  // 音乐画像：store（持久化）+ recorder（捕获）+ facade（UI/Remote 读写）。
+  // 默认开启，用户可在首启引导里关闭。
   const memory = normalizeMemoryConfig((storage?.global.get() as { memory?: unknown } | undefined)?.memory)
   let recorder: TasteRecorder | undefined
   let tasteStore: TasteStore | undefined
-  if (storage && memory.enabled) {
+  let facade: TasteFacade | undefined
+  if (storage) {
     tasteStore = new TasteStore(storage, {
       onWarn: (msg, err) => {
         logger.warn(msg, err)
@@ -194,6 +197,22 @@ export async function apply(ctx: {
         logger.warn(msg, err)
       },
     })
+    facade = new TasteFacade({
+      store: tasteStore,
+      recorder,
+      storage,
+      memory,
+      onMemoryChange: (next) => {
+        // 配置热更新：半衰期/探索率立刻对捕获层生效（不必重启）
+        if (recorder) {
+          recorder.halfLifeDays = next.halfLifeDays
+          recorder.exploreRatio = next.exploreRatio
+        }
+      },
+      onWarn: (msg, err) => {
+        logger.warn(msg, err)
+      },
+    })
   }
 
   // 播放服务（Typert Remote：lxPlayback）
@@ -201,7 +220,7 @@ export async function apply(ctx: {
     storage,
     settings,
     rateLimiter,
-    ...(recorder ? { taste: recorder } : {}),
+    ...(facade ? { taste: facade, tasteUi: facade } : {}),
     onSettingsChange: (s) => {
       // rateLimitPerMinute 变更 → 重建限流器
       if (s.rateLimitPerMinute !== settings.rateLimitPerMinute) {
@@ -238,7 +257,7 @@ export async function apply(ctx: {
   // 插件卸载时释放音源子进程（避免孤儿进程）并结算当前画像会话
   const disposeHook = (ctx as { on?: (event: string, fn: () => void) => void }).on
   disposeHook?.('dispose', () => {
-    recorder?.flush()
+    facade?.flush()
     service.disposeProvider()
   })
 

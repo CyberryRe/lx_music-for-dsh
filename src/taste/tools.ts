@@ -15,7 +15,7 @@ import { normalizeArtist, pickBestMatch, secondsFromInterval, trackKey as makeKe
 import { runWithPlayContext } from './origin'
 import type { TasteStore } from './store'
 import type { MemoryConfig } from './config'
-import type { StoredMusicInfo, StoredTrack } from './schema'
+import type { StoredTrack } from './schema'
 
 export interface TasteToolsOptions {
   service: PlaybackService
@@ -310,7 +310,7 @@ function buildPlaySongTool(options: TasteToolsOptions): ReturnType<typeof define
               trackKey: found.trackKey,
               title: music.name,
               artist: music.singer,
-              music: found.music as StoredMusicInfo,
+              music: found.music as MusicInfo,
               played: false,
               explored: mode === 'explore',
               resolved: true,
@@ -395,7 +395,7 @@ function buildPlaySongTool(options: TasteToolsOptions): ReturnType<typeof define
         trackKey: makeKey(target.name, target.singer),
         title: target.name,
         artist: target.singer,
-        music: target as unknown as StoredMusicInfo,
+        music: target,
         played: false,
         explored: mode === 'explore',
         resolved: true,

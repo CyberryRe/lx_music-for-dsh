@@ -94,6 +94,19 @@ export interface TasteHooks {
   noteRemoved(): void
 }
 
+/**
+ * 画像的 UI/Remote 读写面（TasteFacade 实现）。
+ *
+ * 与捕获钩子分开注入：捕获（taste）可以在没有 UI 门面的场景下单独工作（例如单元测试），
+ * UI 面不可用时远程方法会明确回复"不可用"而不是抛错给客户端。
+ */
+export interface TasteUiBridge {
+  profile(req: { view?: string; limit?: number; mood?: string }): unknown
+  events(limit: number): unknown[]
+  action(req: { action: string; kind?: string; entity?: string; note?: string }): Promise<{ ok: boolean; message: string }>
+  updateConfig(patch: Record<string, unknown>): Promise<unknown>
+}
+
 export interface PlaybackServiceOptions {
   /** 持久化存储（可选：不提供则仅内存）。 */
   storage?: StorageFace
@@ -105,8 +118,10 @@ export interface PlaybackServiceOptions {
   onLog?: (entry: PlayLogEntry) => void
   /** 限流器（tools 使用；service 内部持有引用）。 */
   rateLimiter?: { tryConsume(now?: number): RateLimitStatus; reset(): void }
-  /** 画像录制钩子（1.2.0；不提供则完全不录制）。 */
+  /** 画像捕获钩子（1.2.0；不提供则完全不录制）。 */
   taste?: TasteHooks
+  /** 画像 UI/Remote 读写面。 */
+  tasteUi?: TasteUiBridge
   now?: () => number
 }
 
@@ -120,6 +135,7 @@ export class PlaybackService extends TypertRemoteService {
   private readonly onSettingsChange?: (s: PluginSettings) => void
   private readonly onLog?: (e: PlayLogEntry) => void
   private readonly taste?: TasteHooks
+  private readonly tasteUi?: TasteUiBridge
   readonly rateLimiter?: PlaybackServiceOptions['rateLimiter']
   private readonly now: () => number
   private persistTimer: ReturnType<typeof setTimeout> | null = null
@@ -131,6 +147,7 @@ export class PlaybackService extends TypertRemoteService {
     this.onSettingsChange = options.onSettingsChange
     this.onLog = options.onLog
     this.taste = options.taste
+    this.tasteUi = options.tasteUi
     this.rateLimiter = options.rateLimiter
     this.now = options.now ?? Date.now
     this.settings = { ...DEFAULT_SETTINGS, ...options.settings }
@@ -625,6 +642,38 @@ export class PlaybackService extends TypertRemoteService {
     }
     logs.sort((a, b) => (a.time < b.time ? 1 : -1))
     return jsonSafe(logs.slice(0, limit))
+  }
+
+  // ── 音乐画像（1.2.0：设置窗口「我的口味」页 + 首启引导） ────────────────────
+
+  /** 画像视图：榜单、可直取候选、样本量、配置、探索统计。 */
+  @Remote('getTasteProfile')
+  getTasteProfile(req: { view?: string; limit?: number; mood?: string }): unknown {
+    if (!this.tasteUi) {
+      return { enabled: false, onboarded: true, snoozed: false, summary: '当前会话不可用（storage 未就绪）。', artists: [], tracks: [], sampleSize: 0, config: null }
+    }
+    return jsonSafe(this.tasteUi.profile(req))
+  }
+
+  /** 最近事件（"证据"列表：让用户看到画像为什么长这样）。 */
+  @Remote('getTasteEvents')
+  getTasteEvents(req: { limit?: number }): unknown[] {
+    if (!this.tasteUi) return []
+    return jsonSafe(this.tasteUi.events(req.limit ?? 20))
+  }
+
+  /** 写操作：like / dislike / forget / note / clear / onboard / snooze。 */
+  @Remote('tasteAction')
+  async tasteAction(req: { action: string; kind?: string; entity?: string; note?: string }): Promise<{ ok: boolean; message: string }> {
+    if (!this.tasteUi) return { ok: false, message: '画像不可用（storage 未就绪）。' }
+    return this.tasteUi.action(req)
+  }
+
+  /** 改画像配置（开关、保留期、预算档位、引导状态）。 */
+  @Remote('setMemoryConfig')
+  async setMemoryConfig(req: { patch: Record<string, unknown> }): Promise<unknown> {
+    if (!this.tasteUi) throw new Error('画像不可用（storage 未就绪）')
+    return jsonSafe(await this.tasteUi.updateConfig(req.patch ?? {}))
   }
 
   log(entry: PlayLogEntry): void {

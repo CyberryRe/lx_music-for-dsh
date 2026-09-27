@@ -97,7 +97,7 @@ describe('music_profile', () => {
       ],
       { now: Date.now(), halfLifeDays: 90 },
     )
-    await store.upsertTrackRef({ trackKey: '晴天|周杰伦', title: '晴天', artist: '周杰伦', music: MUSIC as never, played: true, resolved: true })
+    await store.upsertTrackRef({ trackKey: '晴天|周杰伦', title: '晴天', artist: '周杰伦', music: MUSIC, played: true, resolved: true })
 
     const out = await byName('music_profile').execute({ view: 'digest' }, {})
     expect(String(out.summary)).toContain('周杰伦')
@@ -161,7 +161,7 @@ describe('music_profile', () => {
 describe('music_play_song：Tier-1 画像直取', () => {
   it('命中已确认引用时**零搜索**播放', async () => {
     const { byName, store, service } = makeHarness()
-    await store.upsertTrackRef({ trackKey: '晴天|周杰伦', title: '晴天', artist: '周杰伦', music: MUSIC as never, played: true, resolved: true })
+    await store.upsertTrackRef({ trackKey: '晴天|周杰伦', title: '晴天', artist: '周杰伦', music: MUSIC, played: true, resolved: true })
     // 证明"没有发生搜索"：一旦调用 search 就抛错
     service.search = async () => {
       throw new Error('Tier-1 不应该发生搜索')
@@ -180,7 +180,7 @@ describe('music_play_song：Tier-1 画像直取', () => {
 
   it('直取时解析失败要带上原因抛出，不静默换歌', async () => {
     const { byName, store, service } = makeHarness()
-    await store.upsertTrackRef({ trackKey: '晴天|周杰伦', title: '晴天', artist: '周杰伦', music: MUSIC as never, played: true, resolved: true })
+    await store.upsertTrackRef({ trackKey: '晴天|周杰伦', title: '晴天', artist: '周杰伦', music: MUSIC, played: true, resolved: true })
     service.resolveUrl = async () => {
       throw new Error('音源脚本超时')
     }

@@ -126,5 +126,10 @@ export const LXP_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
     desc('reorderSources', [jsonParam('ids', () => z.array(z.string()))]),
     // 日志
     desc('getLogs', [jsonParam('req', looseObject)]),
+    // 音乐画像（1.2.0）
+    desc('getTasteProfile', [jsonParam('req', looseObject)]),
+    desc('getTasteEvents', [jsonParam('req', looseObject)]),
+    desc('tasteAction', [jsonParam('req', looseObject)]),
+    desc('setMemoryConfig', [jsonParam('req', looseObject)]),
   ],
 }
