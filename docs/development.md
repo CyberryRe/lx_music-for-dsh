@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（362 例） |
+| `npm test` | 编译并运行全部单元测试（368 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -90,13 +90,38 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 
 ### 4.1 host 侧（服务端）
 
+- **插件到底有没有被激活：先看 `$DSH_HOME/lx-music-plugin-status.json`**（1.2.1 起自动写出）。
+  它由 `apply()` 一进入就落盘，不依赖任何服务，桌面版看不到 console 时尤其有用：
+  - 文件**不存在** → `apply()` 根本没被调用（loader/依赖/行配置问题，见 §4.1.1），
+    此时服务与工具都不存在，客户端表现为 `lxPlayback/*` 一律 404；
+  - `history` 里的 `phase` 依次是 `enter → storage-ready → ready`，`storage` 字段给出
+    `durable|memory`，`stash`/`migration` 给出迁移细节，`error` 给出失败原因（含栈）。
 - 启动行（同时写 `ctx.logger` 与 stdout，启动 dsh 的终端可见）：
-  `[lx-music-for-dsh] 插件已加载，provider: engine|lxserver|mock，storage: durable|memory`。
+  `[lx-music-for-dsh] 插件已加载，provider: engine|lxserver|mock，storage: durable|memory，工具: N`。
   `storage: memory` 表示 storage domain 打开失败、本次运行不会持久化，同一行附近会有完整原因。
 - 插件行配置错误会在启动时以 FAILED fiber 报告（`dsh --profile web --dump-config` 可检查组合配置与行覆盖结果）。
 - 若 GUI 打不开，先看启动终端：任一 client 行未激活会让 shell 抛
   `web boot: N entries did not activate`；出现 `duplicate loader entry id` 说明 profile 里
   还有手工插入的同 id 行（见 §10.3）。
+
+### 4.1.1 插件"没生效"的两个经典陷阱（1.2.0 实测，各踩一次）
+
+两者的表现完全一样（**服务/工具/存储全部不存在，客户端全 404**），但原因不同：
+
+1. **必需依赖写进了 `inject`**。cordis 的 `inject` 是**必需**依赖：其中任一服务没就绪，
+   `apply()` 就永远不被调用。可选能力（本项目里是 `storageDomain`、`skills`）必须走
+   **作用域注入** `ctx.inject([...], cb)`，并且代码里的降级分支要与之一致。
+   锁：`tests/activation.test.ts` 断言 `inject` 只含 `tools`。
+2. **`Config` 里写了 `.required()` 而随包 `cordis.patch.yml` 没提供该字段**。
+   schemastery 的 `.required()` 要求**行配置显式提供**（`.default()` 兜不住），
+   于是 cordis 在 `resolveConfig` 阶段直接判非法：
+   `ValidationError: invalid config: - $.migrateLegacyDomain missing required value`。
+   用户自己写 profile patch 时（`- id: lx-music`，patch 是**整行替换、不做深度合并**）
+   行配置会整体消失，所以"缺省即可用"是硬要求。
+   锁：`Config({})` 必须通过 + 随包 patch 的 config 必须通过校验（同文件）。
+
+> 教训：`apply()` 里直接传对象给测试是**测不出**这两类的——配置校验发生在 cordis 调用
+> `apply` **之前**。所以要么锁 schema 本身（本轮做法），要么用真实 loader 起一次。
 
 ### 4.2 client 侧（浏览器）
 
@@ -439,6 +464,7 @@ npm test    # = compile-tests + node --test --test-isolation=none --test-concurr
 #   taste-store    聚合落盘与排行、**seen/played 分离**（探索池的前提）、多平台引用与 Tier-1 直取、
 #                 事件按天分桶/单日上限/保留窗口裁剪、探索统计、一键清空，
 #                 以及**"store 真实写出的每条记录都能被 domain schema 接受"**（形状漂移的正面锁）
+#   activation     **激活路径**：`inject` 只含必需依赖（可选能力必须走作用域注入）、`Config({})` 必须通过、`PLUGIN_VERSION` 与 package.json 一致；以及「无 storageDomain 也照样激活」「存储迟到就绪能补挂画像工具」
 #   ui-styles      按钮/卡片两条 CSS 约定：.lxm-btn 用 min-width + nowrap（不依赖父容器）、.lxm-btn-text 自带按钮框、TasteWindow 全部 	ype="button"；**.lxm-card 必须可被压缩（max-width/min-width/overflow）且报错用 .lxm-error 换行两行截断**（否则长报错会撑出侧边栏、盖住设置入口）
 #   storage-keys   **per-record 键必须 path-safe**：映射规则（直通/编码/单射/超长哈希）、
 #                 真实后端确实会拒绝 ISO 时间戳键（说明这一层不可省）、
@@ -474,7 +500,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（362 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（368 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）
@@ -547,6 +573,36 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 
 **(3) 音乐画像。** 设计与验证结论见 `docs/design-taste-memory.md`；
 人工实测清单见 §9.1（升级路径本身也要验）。
+
+### 10.0.1 1.2.1：桌面版实测暴露的三个问题
+
+1.2.0 装到桌面版后"看起来什么都没生效"：`lxPlayback/*` 全 404、`storages/lx_music/` 一直不出现、
+  画像工具也不存在。三处根因都在这一版修掉：
+
+**(1) 插件从未被激活（根因）。** 1.2.0 的 `Config` 新增了
+`migrateLegacyDomain: z.boolean().required().default(true)`，但**没同步进随包
+`cordis.patch.yml` 的行配置** → schemastery 的 `.required()` 要求行配置显式提供 →
+cordis `resolveConfig` 判配置非法：
+
+```
+启用失败：1 entry did not activate lx-music (lx-music-for-dsh):
+ValidationError: invalid config:
+- $.migrateLegacyDomain missing required value (at migrateLegacyDomain)
+```
+
+`apply()` 因此从未被调用：服务、工具、存储一概不存在（客户端全 404，存储目录当然也不会出现）。
+修法：**去掉所有 `.required()`**（默认值即可用），并把字段补进随包 patch；
+同时把 `inject` 从 `['tools','storageDomain']` 收紧为 `['tools']` —— `storageDomain` 是**可选**
+能力（代码里本来就有内存降级分支），写进必需依赖会让"存储没就绪"升级成"插件完全不存在"。
+存储改由作用域注入迟到挂载（`PlaybackService.attachStorage/attachTaste`）。
+诊断入口：`$DSH_HOME/lx-music-plugin-status.json`（§4.1）+ 两个陷阱的清单（§4.1.1）。
+
+**(2) per-record 键必须 path-safe，且不能依赖 backend bootstrap。** 见 §7.1.1：
+`logs` 的 ISO 时间戳键（含冒号）在 Windows 上让 open() 抛 ENOENT（bootstrap 不校验键），
+插件静默退化成内存模式；迁移改为"自己读 → 旧文件改名搁置 → 打开 → 显式迁移"。
+
+**(3) 侧边栏小卡片被长报错撑破。** `.lxm-card` 缺宽度约束，报错文本（含 URL/JSON、无空格）
+把卡片撑出侧边栏并盖住设置入口；现在卡片可被压缩、报错单独一行换行 + 两行截断 + `title`。
 
 ### 10.1 1.1.0：双契约（一份产物兼容两代 DSH）+ 桌面版沙箱修复
 

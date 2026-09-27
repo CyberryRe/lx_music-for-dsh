@@ -243,6 +243,27 @@ class NegatedExpect extends MiniExpect {
   override toBeDefined(): void {
     if (this.actual !== undefined) fail('期望 undefined')
   }
+  /** `expect(fn).not.toThrow()`：函数**抛出**才算失败（此前取反写反了，虚报失败）。 */
+  override toThrow(matcher?: string | RegExp | Error): void {
+    try {
+      ;(this.actual as () => void)()
+    } catch {
+      // 抛了 → 不满足 "not.toThrow"（若给了 matcher，只有匹配时才算失败）
+      const message = ((): string => {
+        try {
+          ;(this.actual as () => void)()
+        } catch (err) {
+          return err instanceof Error ? err.message : String(err)
+        }
+        return ''
+      })()
+      if (matcher === undefined) fail(`期望不抛出异常，实际抛出: ${message}`)
+      if (matcher instanceof RegExp && matcher.test(message)) fail(`期望不抛出匹配 ${String(matcher)} 的异常: ${message}`)
+      if (typeof matcher === 'string' && message.includes(matcher)) fail(`期望不抛出包含 "${matcher}" 的异常: ${message}`)
+      return
+    }
+    // 没抛 → 满足断言
+  }
 }
 
 /** 解析 Promise 的断言包装：expect(p).rejects.toMatchObject(...) / await expect(p).rejects... */

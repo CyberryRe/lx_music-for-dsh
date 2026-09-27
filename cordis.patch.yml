@@ -32,3 +32,5 @@
         autoPullHighestOnSwitch: true
         fallbackStrategy: 'both'
         rateLimitPerMinute: 6
+        # 旧版 single 布局存储 → per-record 的一次性迁移（默认 true；仅测试/嵌入方需要关掉）
+        migrateLegacyDomain: true

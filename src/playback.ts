@@ -131,11 +131,11 @@ export class PlaybackService extends TypertRemoteService {
   private state: PlayerState
   private settings: PluginSettings
   private provider: Provider
-  private readonly storage?: StorageFace
+  private storage?: StorageFace
   private readonly onSettingsChange?: (s: PluginSettings) => void
   private readonly onLog?: (e: PlayLogEntry) => void
-  private readonly taste?: TasteHooks
-  private readonly tasteUi?: TasteUiBridge
+  private taste?: TasteHooks
+  private tasteUi?: TasteUiBridge
   readonly rateLimiter?: PlaybackServiceOptions['rateLimiter']
   private readonly now: () => number
   private persistTimer: ReturnType<typeof setTimeout> | null = null
@@ -243,6 +243,43 @@ export class PlaybackService extends TypertRemoteService {
 
   private bump(): void {
     this.state.version += 1
+  }
+
+  /**
+   * 迟到挂载持久层。
+   *
+   * 为什么需要：`storageDomain` 是**可选**依赖，插件的服务与工具**不能**因为存储没就绪就
+   * 不存在——1.2.0 实测吃过这个亏（`inject` 里写了 `storageDomain`，服务未注册 →
+   * 所有 `lxPlayback/*` 一律 404，连"内存模式能用"都做不到）。
+   * 现在激活流程改为"先注册服务与工具，存储就绪后再挂上"，本方法负责把已落盘状态合并进来。
+   */
+  attachStorage(storage: StorageFace): void {
+    if (this.storage) return
+    this.storage = storage
+    // 已经在放歌就不动状态（避免把刚点播的播放列表覆盖回旧的）
+    if (this.state.status === 'playing' && this.state.current) return
+    const persisted = this.loadPersisted()
+    if (persisted.settings && typeof persisted.settings === 'object') {
+      this.settings = { ...this.settings, ...(persisted.settings as PluginSettings) }
+    }
+    this.state.playlist = persisted.playlist
+    this.state.currentIndex = persisted.currentIndex
+    this.state.current = persisted.currentIndex >= 0 ? (persisted.playlist[persisted.currentIndex] ?? null) : null
+    this.state.status = persisted.currentIndex >= 0 ? 'paused' : 'stoped'
+    this.state.progress = 0
+    this.state.duration = this.state.current ? intervalToSeconds(this.state.current.interval) : 0
+    this.state.quality = persisted.quality
+    this.state.volume = persisted.volume
+    this.state.mute = persisted.mute
+    this.state.playMode = persisted.playMode ?? this.state.playMode
+    this.bump()
+    this.schedulePersist()
+  }
+
+  /** 迟到挂载画像钩子（画像依赖存储，因此与 attachStorage 成对使用）。 */
+  attachTaste(taste?: TasteHooks, tasteUi?: TasteUiBridge): void {
+    if (taste) this.taste = taste
+    if (tasteUi) this.tasteUi = tasteUi
   }
 
   // ── Remote: 状态查询 ──────────────────────────────────────────────────────

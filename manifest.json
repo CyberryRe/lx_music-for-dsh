@@ -2,7 +2,7 @@
   "$schema": "./docs/manifest.schema.json",
   "id": "lx-music-for-dsh",
   "name": "LX Music for DSH",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "为 LX Music 提供增强控制界面与 LLM 交互能力：侧边栏迷你播放卡片（含播放模式切换）、搜索/播放列表主窗口、音源与音质策略设置窗口、细粒度音乐工具集（music_search/play/playlist/prev/next/control）、音乐画像（本地口味记忆 + 精确点播 music_profile/music_play_song/music_taste）与「我的口味」窗口",
   "author": "dsh",
   "license": "Apache-2.0",
