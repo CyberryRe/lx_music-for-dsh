@@ -61,7 +61,7 @@ describe('host 集成（apply 全流程）', () => {
     ctx.storageDomain = fakeStorageDomain()
     ctx.logger = console
 
-    await apply(ctx, { providerMode: 'mock', rateLimitPerMinute: 3 })
+    await apply(ctx, { providerMode: 'mock', rateLimitPerMinute: 3, migrateLegacyDomain: false })
 
     // 1. 服务注册
     expect(typeof ctx.lxPlayback?.getState).toBe('function')
@@ -105,7 +105,7 @@ describe('host 集成（apply 全流程）', () => {
     ctx.tools = { register: (t) => tools.push(t as ToolLike) }
     ctx.storageDomain = fakeStorageDomain()
     ctx.logger = console
-    await apply(ctx, { providerMode: 'mock', rateLimitPerMinute: 2 })
+    await apply(ctx, { providerMode: 'mock', rateLimitPerMinute: 2, migrateLegacyDomain: false })
 
     const findTool = (name: string): ToolLike => {
       const tool = tools.find((t) => t.name === name)
@@ -140,7 +140,7 @@ describe('host 集成（apply 全流程）', () => {
     const tools: ToolLike[] = []
     ctx.tools = { register: (t) => tools.push(t as ToolLike) }
     ctx.logger = console
-    await apply(ctx, { providerMode: 'mock' })
+    await apply(ctx, { providerMode: 'mock', migrateLegacyDomain: false })
     const svc = ctx.lxPlayback!
     svc.addMusic([{ id: 'x', name: 'X', singer: 'Y', source: 'wy', interval: '01:00', meta: { songId: 'x' } }], 'tail')
     expect(svc.getState().playlist).toHaveLength(1)

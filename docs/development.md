@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（136 例） |
+| `npm test` | 编译并运行全部单元测试（160 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -303,8 +303,41 @@ pnpm ≥ 10.26 出于供应链安全默认禁止 git 依赖执行 `prepare` 脚�
 | `autoPullHighestOnSwitch` | `true` | 切歌自动拉取最高音质 |
 | `fallbackStrategy` | `'both'` | 解析失败降级策略（next-quality/next-platform/both） |
 | `rateLimitPerMinute` | `6` | LLM 点歌限流（次/分钟） |
+| `migrateLegacyDomain` | `true` | 1.2.0 一次性迁移开关：把旧版 `single` 布局的 `lx_music.json` 迁到新的 per-record 布局。仅测试/嵌入方需要关掉 |
 
-设置窗口的修改会持久化到 `$DSH_HOME/storages/lx_music.json`（storage domain `lx_music`），
+### 7.1 存储布局（1.2.0 起：per-record）
+
+1.1.0 及更早用 `single` 布局：整个 domain 是**一份** `$DSH_HOME/storages/lx_music.json`，
+**每次写都重写整份文件**。1.2.0 起换成 `per-record`：
+
+```
+$DSH_HOME/storages/
+├── lx_music.json                    # 旧版整份文件：迁移后**原样保留**（天然备份 + 回退源）
+└── lx_music/                        # 新版：一条记录一个文件
+    ├── global.json                  # 播放列表/当前索引/音质/音量/静音/播放模式/设置/画像配置
+    ├── logs/<时间戳>.json
+    ├── sources/<音源 id>.json
+    └── source_order/order.json
+```
+
+同时声明了 `invalidRecords: 'backup-and-skip'`：某条记录不匹配 schema 时会被改名为
+`<键>.json.bak.<时间戳>` 并跳过，**不再让整个 `open` 失败**。这两条是绑定的——
+`backup-and-skip` 只在 per-record 下有效（single 布局只有一份文档，无法"把单条记录挪走"）；
+single 下一条坏记录就会让整个 domain 打不开、播放列表/设置全部静默退化为不落盘，
+这正是 1.0.1 事故的机制（见 §10.3）。
+
+**升级时的迁移**（自动，仅一次）：`apply()` 在 `PlaybackService` 读取 global **之前**调用
+`migrateLegacyDomain()`，顺序是"先表记录、后 global"，幂等标记 `global.memory.migratedFrom`
+写在 global 上，因此只有 global 写成功才算完成，失败会在下次启动重试。
+
+为什么不能只靠 backend 的 "legacy bootstrap"：它会把旧的**表记录**播种进新的 per-record 目录，
+但**不带 `global`**——而播放列表/当前索引/音质/音量/静音/播放模式/设置全在 global 里。
+另外 bootstrap 只在"新目录完全为空"时生效，任何一次提前写入都会让它失效，所以显式迁移更稳。
+
+回退方式：删掉 `lx_music/` 目录，旧版插件会重新读取仍在原处的 `lx_music.json`
+（但**新版写入的状态会丢**，回退前先备份）。
+
+设置窗口的修改会持久化到该 domain（`global.settings`），
 优先于行配置。该 domain 的 schema 是**持久层读边界校验**：任一条存储记录不匹配就会让整个
 `open` 失败、插件降级为内存存储，因此改动 schema 必须与代码实际写入的形状逐字段对齐
 （见 §10.3 与 `tests/host.integration.test.ts`）。
@@ -341,6 +374,13 @@ npm test    # = compile-tests + node --test --test-isolation=none --test-concurr
 #                 校验规则、与 PlaybackService 的 @Remote 方法双向一致（方法名 + 形参个数）
 #   host.integration  apply 全流程（服务注册/工具集注册/搜索→直链→播放/限流）、
 #                 storage domain schema 与写入形状一致性
+#   domain-spec    domainSpec 契约：per-record + invalidRecords 成对存在、version 保持 1、
+#                 global schema 兼容缺 memory 的老数据、保留 playMode/settings；画像配置的
+#                 默认值/夹紧/迁移标记
+#   domain-migration  旧 single 整份文件 → per-record：表记录 + global 全量迁移、幂等、
+#                 失败不写标记（下次重试）、**绝不修改旧文件**、新值优先的合并策略
+#   domain-backend  真实 JSON backend 落盘行为：per-record 下坏记录被改名备份且 open 存活（幂等）、
+#                 single 下同一条坏记录让整个 open 失败（1.2.0 离开 single 的原因）
 ```
 
 可选真实网络冒烟（五平台搜索，需外网）：
@@ -356,7 +396,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（136 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（160 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）

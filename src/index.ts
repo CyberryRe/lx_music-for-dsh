@@ -9,6 +9,8 @@ import { PlaybackService, adaptDomain } from './playback'
 import { registerMusicTools } from './tools'
 import { SlidingWindowRateLimiter } from './ratelimit'
 import { DEFAULT_SETTINGS, type PluginSettings } from './shared/types'
+import { memoryConfigSchema } from './taste/config'
+import { defaultDomainFile, migrateLegacyDomain } from './storage/migrate'
 
 export const name = 'lx-music-for-dsh'
 
@@ -24,6 +26,9 @@ export const Config = z.object({
   fallbackStrategy: z.string().required().default(DEFAULT_SETTINGS.fallbackStrategy),
   rateLimitPerMinute: z.number().required().default(DEFAULT_SETTINGS.rateLimitPerMinute),
   providerMode: z.string().required().default(DEFAULT_SETTINGS.providerMode),
+  // 一次性把旧版 single 布局的数据迁到 per-record（默认开）。
+  // 关闭仅用于测试/嵌入方，避免在用户真实 $DSH_HOME 上产生写盘副作用。
+  migrateLegacyDomain: z.boolean().required().default(true),
 })
 
 const qualityEnum = zod.enum(['128k', '320k', 'flac', 'flac24bit', 'flac32bit', 'wav'])
@@ -43,6 +48,12 @@ const playModeEnum = zod.enum(['list', 'single', 'order', 'shuffle'])
 export const domainSpec = defineDomain({
   name: 'lx_music',
   version: 1,
+  // 1.2.0：从 single 换成 per-record —— 每次写只重写一条记录，而不是整份文件
+  // （events/画像表写入频繁，single 的写放大不可接受）。
+  // 并且 invalidRecords 只在 per-record 下生效（single 下坏记录仍会殉爆整个 open，
+  // 这正是 1.0.1 的事故机制）；两者是绑定的，见 docs/design-taste-memory.md §2。
+  layout: 'per-record',
+  invalidRecords: 'backup-and-skip',
   global: {
     schema: zod.object({
       playlist: zod.array(zod.unknown()),
@@ -52,6 +63,8 @@ export const domainSpec = defineDomain({
       mute: zod.boolean(),
       playMode: playModeEnum.optional(),
       settings: zod.unknown().optional(),
+      // 音乐画像配置（1.2.0）；字段全部可选，读侧用 normalizeMemoryConfig 合并默认值
+      memory: memoryConfigSchema.optional(),
     }),
     initial: { playlist: [], currentIndex: -1, quality: '320k' as const, volume: 1, mute: false },
   },
@@ -108,6 +121,8 @@ export async function apply(ctx: {
 }, rawConfig: Record<string, unknown>): Promise<void> {
   const settings = toSettings(rawConfig)
   const logger = ctx.logger ?? console
+  // 迁移开关：默认开；只有显式 false / 'false' 才关闭（YAML 行配置可能给字符串）
+  const migrateLegacy = !(rawConfig.migrateLegacyDomain === false || rawConfig.migrateLegacyDomain === 'false')
 
   // 限流器（LLM 点歌防刷）
   const rateLimiter = new SlidingWindowRateLimiter({
@@ -121,6 +136,24 @@ export async function apply(ctx: {
     try {
       const domain = (await ctx.storageDomain.open(domainSpec)) as Parameters<typeof adaptDomain>[0]
       storage = adaptDomain(domain)
+      // 一次性迁移：旧版 single 布局的整份文件 → per-record。
+      // 必须在 PlaybackService 读取 global **之前**执行，否则会先读到默认值再被覆盖。
+      // 仅迁移表记录是不够的：backend 的 legacy bootstrap 不带 global，而播放列表/设置都在 global。
+      if (migrateLegacy !== false) {
+        await migrateLegacyDomain({
+          target: storage,
+          specTables: Object.keys(domainSpec.tables),
+          legacyPath: defaultDomainFile(),
+          log: (msg) => {
+            logger.warn(msg)
+            console.info(msg)
+          },
+          warn: (msg) => {
+            logger.warn(msg)
+            console.error(msg)
+          },
+        })
+      }
     } catch (err) {
       // 双写：ctx.logger 由宿主决定去向（可能被日志级别吞掉），console 保证终端可见。
       // 这条降级是静默的（UI 仍然可用，只是状态不落盘），必须显式告警。

@@ -125,7 +125,7 @@ manifest.json     插件清单（元数据：入口、生命周期、工具、�
 src/index.ts      host 入口
 src/client.ts     client 入口
 src/ui/           React 组件
-tests/            单元测试（136 例）
+tests/            单元测试（160 例）
 docs/             开发文档 / DSH 与 LX Music 研读笔记
 ```
 
