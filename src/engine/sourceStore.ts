@@ -1,5 +1,7 @@
 // 本地音源存储：音源脚本持久化（storage domain 'sources' 表 / 'source_order' 表，内存兜底）。
 
+import { storageKey } from '../storage/keys'
+
 export interface SourceRecord {
   id: string
   name: string
@@ -115,7 +117,7 @@ export class DomainSourceStore implements SourceStoreFace {
       const theirs = String(record.updatedAt ?? '')
       if (existing !== undefined && ours >= theirs) continue
       void this.memory.put(record)
-      writes.push(this.sourceTable.put(record.id, record).catch(() => undefined))
+      writes.push(this.sourceTable.put(storageKey(record.id), record).catch(() => undefined))
       adopted.push(record.id)
     }
     if (adopted.length > 0) {
@@ -145,13 +147,13 @@ export class DomainSourceStore implements SourceStoreFace {
   }
   async put(record: SourceRecord): Promise<void> {
     await this.memory.put(record)
-    await this.sourceTable.put(record.id, record).catch(() => undefined)
+    await this.sourceTable.put(storageKey(record.id), record).catch(() => undefined)
     await this.orderTable.put('order', this.memory.order()).catch(() => undefined)
   }
   async remove(id: string): Promise<boolean> {
     const existed = await this.memory.remove(id)
     if (existed) {
-      await this.sourceTable.delete(id).catch(() => undefined)
+      await this.sourceTable.delete(storageKey(id)).catch(() => undefined)
       await this.orderTable.put('order', this.memory.order()).catch(() => undefined)
     }
     return existed

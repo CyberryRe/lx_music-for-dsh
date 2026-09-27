@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（341 例） |
+| `npm test` | 编译并运行全部单元测试（357 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -331,11 +331,11 @@ pnpm ≥ 10.26 出于供应链安全默认禁止 git 依赖执行 `prepare` 脚�
 
 ```
 $DSH_HOME/storages/
-├── lx_music.json                    # 旧版整份文件：迁移后**原样保留**（天然备份 + 回退源）
-└── lx_music/                        # 新版：一条记录一个文件
-    ├── global.json                  # 播放列表/当前索引/音质/音量/静音/播放模式/设置/画像配置
-    ├── logs/<时间戳>.json
-    ├── sources/<音源 id>.json
+├── lx_music.json.migrated-<时间戳>    # 旧版整份文件：迁移时改名搁置（**不删**，可回退）
+└── lx_music/                          # 新版：一条记录一个文件
+    ├── global.json                    # 播放列表/当前索引/音质/音量/静音/播放模式/设置/画像配置
+    ├── logs/_2026-09-11T03_3a47_…json # 键经 storageKey 转义（见下）
+    ├── sources/…json
     └── source_order/order.json
 ```
 
@@ -345,15 +345,42 @@ $DSH_HOME/storages/
 single 下一条坏记录就会让整个 domain 打不开、播放列表/设置全部静默退化为不落盘，
 这正是 1.0.1 事故的机制（见 §10.3）。
 
-**升级时的迁移**（自动，仅一次）：`apply()` 在 `PlaybackService` 读取 global **之前**调用
-`migrateLegacyDomain()`，顺序是"先表记录、后 global"，幂等标记 `global.memory.migratedFrom`
-写在 global 上，因此只有 global 写成功才算完成，失败会在下次启动重试。
+#### 7.1.1 两条硬约束（1.2.0 桌面版实测踩出来的）
 
-为什么不能只靠 backend 的 "legacy bootstrap"：它会把旧的**表记录**播种进新的 per-record 目录，
-但**不带 `global`**——而播放列表/当前索引/音质/音量/静音/播放模式/设置全在 global 里。
-另外 bootstrap 只在"新目录完全为空"时生效，任何一次提前写入都会让它失效，所以显式迁移更稳。
+**(1) 表的键会变成文件名，必须 path-safe。** per-record 单元把键直接当文件名，后端要求
+键匹配 **`/^[a-zA-Z0-9_-]+$/`**（否则写入报 `per-record key '…' is not path-safe`）。
+本插件的键大量含非法字符：`logs` 用 ISO 时间戳（含冒号）、画像表用 `曲名|艺人`、
+`platform:tx`、`mood:…@artist:…`。因此**所有写进 storage 的键都统一过
+`src/storage/keys.ts` 的 `storageKey()`**：
 
-回退方式：删掉 `lx_music/` 目录，旧版插件会重新读取仍在原处的 `lx_music.json`
+| 原始键 | 映射后 |
+|---|---|
+| `2026-09-11` / `order` / `summary` / `id-1` | 原样（已是安全形态，保持可读） |
+| `2026-09-11T03:47:40.052Z` | `_2026-09-11T03_3a47_3a40_2e052Z` |
+| `platform:tx` | `_platform_3atx` |
+| `晴天\|周杰伦` | `__e6_99_b4…` |
+
+规则：安全形态（`^[a-zA-Z0-9][a-zA-Z0-9-]*$`，不含下划线）原样直通；其余编码成
+`_` 前缀 + 逐字节 `_xx` 十六进制。两个分支互斥（直通分支不可能以下划线开头）→ **映射单射**；
+超长时截断并附 16 位内容哈希。**注意：域内/内存里的键保持原始形态，只在 storage 边界转换。**
+
+**(2) 不能依赖 backend 的 legacy bootstrap。** 它只播种表记录、**不带 `global`**
+（播放列表/索引/音质/音量/静音/播放模式/设置全在 global 里）；更要命的是它**不做键校验**，
+直接按旧文件的原始键写文件 —— Windows 上冒号非法，于是以
+`ENOENT: rename '….tmp' -> '…2026-09-11T03:47:40.052Z.json'` 失败、整个 `open()` 抛错、
+插件静默退化成内存存储（这正是 1.2.0 首次上线时的现象）。
+
+**升级时的迁移**（自动，仅一次）因此改成"自己读 → 改名搁置 → 打开 → 显式迁移"：
+
+1. `readLegacyWholeUnit()` 先读出旧数据（无副作用）；
+2. 判定需要迁移时 `stashLegacyFile()` 把旧文件改名为 `lx_music.json.migrated-<时间戳>`
+   （旧文件不在原路径 → bootstrap 不会触发；**打开失败会 `restoreLegacyFile()` 还原**）；
+3. `open(domainSpec)`；
+4. `migrateLegacyDomain()`：先表记录（键过 `storageKey`）、后 global，幂等标记
+   `global.memory.migratedFrom` 写在 global 上 → 只有 global 写成功才算迁移完成，失败下次重试。
+
+回退方式：删掉 `lx_music/` 目录并把 `lx_music.json.migrated-<时间戳>` 改回原名，
+旧版插件即可继续读取。
 （但**新版写入的状态会丢**，回退前先备份）。
 
 设置窗口的修改会持久化到该 domain（`global.settings`），
@@ -412,6 +439,10 @@ npm test    # = compile-tests + node --test --test-isolation=none --test-concurr
 #   taste-store    聚合落盘与排行、**seen/played 分离**（探索池的前提）、多平台引用与 Tier-1 直取、
 #                 事件按天分桶/单日上限/保留窗口裁剪、探索统计、一键清空，
 #                 以及**"store 真实写出的每条记录都能被 domain schema 接受"**（形状漂移的正面锁）
+#   storage-keys   **per-record 键必须 path-safe**：映射规则（直通/编码/单射/超长哈希）、
+#                 真实后端确实会拒绝 ISO 时间戳键（说明这一层不可省）、
+#                 含非法字符的旧数据"改名搁置 → 打开 → 显式迁移"能跑通且 global 逐项保留、
+#                 （Windows 专属）不搁置直接打开时 bootstrap 因非法键失败
 #   taste-recorder 播放捕获：会话生命周期（切歌按已播比例结算、single 重播、暂停恢复不重开会话）、
 #                 完整/部分/切走三种结算、**探索负反馈 ×0.25**、播放出错不算偏好、
 #                 seen→played 升级、意图信号与来源归因（AsyncLocalStorage）、存储故障隔离，
@@ -442,7 +473,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（341 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（357 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）

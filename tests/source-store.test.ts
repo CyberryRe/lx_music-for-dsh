@@ -1,5 +1,6 @@
 // FileSourceStore：音源持久化（重启不丢）回归测试
 import { test } from 'node:test'
+import { storageKey } from '../src/storage/keys'
 import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -109,7 +110,7 @@ test('DomainSourceStore：把旧文件存储里的音源合并进 domain（不�
 
   assert.equal(store.get('xinghai.js')?.name, '星海音乐源')
   assert.equal(store.get('old.js')?.name, 'domain 里的新记录')
-  assert.equal(storage.tables.get('sources')?.get('xinghai.js') !== undefined, true)
+  assert.equal(storage.tables.get('sources')?.get(storageKey('xinghai.js')) !== undefined, true)
   // 顺序合并后 xinghai 在 old 之前
   assert.deepEqual(store.order(), ['xinghai.js', 'old.js'])
   // 已迁移标记：文件被改名，避免用户删除音源后被旧文件复活

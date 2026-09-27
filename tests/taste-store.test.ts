@@ -8,6 +8,7 @@ import { describe, expect, it } from './mini'
 import { domainSpec } from '../src/index'
 import type { StorageFace } from '../src/playback'
 import { MAX_EVENTS_PER_DAY, TasteStore, dayKey } from '../src/taste/store'
+import { storageKey } from '../src/storage/keys'
 import { explicitDelta, settlePlaySession, type EntityDelta } from '../src/taste/events'
 import type { MusicInfo } from '../src/shared/types'
 
@@ -64,8 +65,8 @@ describe('TasteStore：聚合与落盘', () => {
     const result = await store.applyDeltas(track('晴天|周杰伦', '周杰伦'), { now: T0, halfLifeDays: 90 })
 
     expect(result.changed.sort()).toEqual(['周杰伦', '晴天|周杰伦'])
-    expect(storage.raw.get('taste_tracks')?.has('晴天|周杰伦')).toBe(true)
-    expect(storage.raw.get('taste_artists')?.has('周杰伦')).toBe(true)
+    expect(storage.raw.get('taste_tracks')?.has(storageKey('晴天|周杰伦'))).toBe(true)
+    expect(storage.raw.get('taste_artists')?.has(storageKey('周杰伦'))).toBe(true)
     expect(result.written.taste_tracks).toBe(1)
     expect(result.written.taste_artists).toBe(1)
   })
@@ -97,7 +98,7 @@ describe('TasteStore：聚合与落盘', () => {
       now: T0,
       halfLifeDays: 90,
     })
-    const persisted = storage.raw.get('taste_artists')?.get('金玟岐') as { explicit: number }
+    const persisted = storage.raw.get('taste_artists')?.get(storageKey('金玟岐')) as { explicit: number }
     expect(persisted.explicit).toBe(3)
     const far = T0 + 20 * DAY * 90
     expect(store.top('artist', { now: far, halfLifeDays: 90 })[0]?.score).toBeCloseTo(3, 3)
@@ -116,8 +117,8 @@ describe('TasteStore：聚合与落盘', () => {
     const size = storage.raw.get('taste_tags')?.size ?? 0
     expect(size).toBeLessThanOrEqual(200)
     // 分最低的几个应该被丢掉
-    expect(storage.raw.get('taste_tags')?.has('tag:0')).toBe(false)
-    expect(storage.raw.get('taste_tags')?.has('tag:204')).toBe(true)
+    expect(storage.raw.get('taste_tags')?.has(storageKey('tag:0'))).toBe(false)
+    expect(storage.raw.get('taste_tags')?.has(storageKey('tag:204'))).toBe(true)
   })
 
   it('坏记录被跳过并告警，不影响其它实体', () => {
@@ -137,7 +138,7 @@ describe('TasteStore：可播放引用（Tier-1）与 seen/played', () => {
     await store.upsertTrackRef({ trackKey: '起风了|买辣椒也用券', title: '起风了', artist: '买辣椒也用券', music: MUSIC_TX, played: false, explored: true })
     expect(store.hasPlayed('起风了|买辣椒也用券')).toBe(false)
     expect(store.playedKeys().size).toBe(0)
-    const record = storage.raw.get('taste_tracks')?.get('起风了|买辣椒也用券') as { status: string; lastExploredAt?: number }
+    const record = storage.raw.get('taste_tracks')?.get(storageKey('起风了|买辣椒也用券')) as { status: string; lastExploredAt?: number }
     expect(record.status).toBe('seen')
     expect(record.lastExploredAt).toBe(T0)
   })

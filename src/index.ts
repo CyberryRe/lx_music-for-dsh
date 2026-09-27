@@ -16,7 +16,8 @@ import { TasteRecorder } from './taste/recorder'
 import { TasteFacade } from './taste/facade'
 import { registerTasteTools } from './taste/tools'
 import { TASTE_SKILL, TASTE_SKILL_NAME } from './taste/skill'
-import { defaultDomainFile, migrateLegacyDomain } from './storage/migrate'
+import { defaultDomainFile, migrateLegacyDomain, needsLegacyMigration, readLegacyWholeUnit, restoreLegacyFile, stashLegacyFile } from './storage/migrate'
+import { storageKey } from './storage/keys'
 
 export const name = 'lx-music-for-dsh'
 
@@ -149,17 +150,31 @@ export async function apply(ctx: {
   // storage domain（可选：storageDomain 服务不可用时仅内存）
   let storage: ReturnType<typeof adaptDomain> | undefined
   if (ctx.storageDomain) {
+    // 一次性迁移的前置：**先读旧数据、把旧文件改名搁置，再打开 domain**。
+    //
+    // 为什么顺序不能反：JSON backend 的 legacy bootstrap 会用旧文件的**原始键**当文件名
+    // （不做转义），而 `logs` 表的键是 ISO 时间戳（含冒号，Windows 文件名非法）→
+    // bootstrap 抛 ENOENT → 整个 open() 失败 → 插件静默退化成内存存储。
+    // 把旧文件改名后 bootstrap 不再触发，迁移完全由下面显式完成。
+    const legacyPath = defaultDomainFile()
+    const legacy = readLegacyWholeUnit(legacyPath)
+    const stashed = migrateLegacy !== false && needsLegacyMigration(domainSpec.name) ? stashLegacyFile() : undefined
+    if (stashed) {
+      const msg = `[lx-music-for-dsh] 旧存储已改名搁置（迁移用）：${stashed}`
+      logger.warn(msg)
+      console.info(msg)
+    }
     try {
       const domain = (await ctx.storageDomain.open(domainSpec)) as Parameters<typeof adaptDomain>[0]
       storage = adaptDomain(domain)
-      // 一次性迁移：旧版 single 布局的整份文件 → per-record。
-      // 必须在 PlaybackService 读取 global **之前**执行，否则会先读到默认值再被覆盖。
-      // 仅迁移表记录是不够的：backend 的 legacy bootstrap 不带 global，而播放列表/设置都在 global。
-      if (migrateLegacy !== false) {
+      // 显式迁移（表记录 + global）：必须在 PlaybackService 读取 global **之前**执行，
+      // 否则会先读到默认值再被覆盖。键统一过 storageKey()（旧键可能含 Windows 非法字符）。
+      if (migrateLegacy !== false && legacy) {
         await migrateLegacyDomain({
           target: storage,
           specTables: Object.keys(domainSpec.tables),
-          legacyPath: defaultDomainFile(),
+          legacyPath: stashed ?? legacyPath,
+          legacy,
           log: (msg) => {
             logger.warn(msg)
             console.info(msg)
@@ -171,6 +186,12 @@ export async function apply(ctx: {
         })
       }
     } catch (err) {
+      // 打开失败 → 把搁置的旧文件还原，保证用户数据始终在原位、旧版本仍能读回
+      if (restoreLegacyFile(stashed)) {
+        const msg = '[lx-music-for-dsh] storage 打开失败，已把旧存储还原回原位'
+        logger.warn(msg)
+        console.error(msg)
+      }
       // 双写：ctx.logger 由宿主决定去向（可能被日志级别吞掉），console 保证终端可见。
       // 这条降级是静默的（UI 仍然可用，只是状态不落盘），必须显式告警。
       logger.warn('[lx-music-for-dsh] storage domain 打开失败，使用内存存储:', err)
@@ -234,7 +255,7 @@ export async function apply(ctx: {
     },
     onLog: (entry) => {
       if (storage) {
-        storage.table('logs').put(entry.time, entry).catch((err) => logger.warn('[lx-music-for-dsh] 日志写入失败:', err))
+        storage.table('logs').put(storageKey(entry.time), entry).catch((err) => logger.warn('[lx-music-for-dsh] 日志写入失败:', err))
       }
     },
   })
@@ -251,7 +272,7 @@ export async function apply(ctx: {
       memory,
       onLog: (entry) => {
         if (storage) {
-          storage.table('logs').put(entry.time, entry).catch((err) => logger.warn('[lx-music-for-dsh] 日志写入失败:', err))
+          storage.table('logs').put(storageKey(entry.time), entry).catch((err) => logger.warn('[lx-music-for-dsh] 日志写入失败:', err))
         }
       },
     })

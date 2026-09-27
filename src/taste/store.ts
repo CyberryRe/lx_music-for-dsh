@@ -8,6 +8,7 @@
 //   - 聚合：**按键随机访问**（排序、单条更新、遗忘某个艺人），所以一个实体一条记录。
 
 import type { StorageFace } from '../playback'
+import { storageKey } from '../storage/keys'
 import type { MusicInfo } from '../shared/types'
 import type { EntityDelta, TasteEntityKind, TasteEventKind, TasteEventMode, TasteEventOrigin, TasteProvenance } from './events'
 import { applyDeltas, pruneEvents, topEntities, type EntityTable, type ProfileEntity, type RankedEntity } from './profile'
@@ -164,7 +165,7 @@ export class TasteStore {
         const entity = pruned.kept[key]
         if (!entity) continue
         try {
-          await this.storage.table(table).put(key, this.serialize(kind, entity))
+          await this.storage.table(table).put(storageKey(key), this.serialize(kind, entity))
           count += 1
         } catch (err) {
           this.onWarn(`[lx-music-for-dsh] 画像写入失败: ${table}/${key}`, err)
@@ -172,7 +173,7 @@ export class TasteStore {
       }
       for (const key of pruned.removed) {
         try {
-          await this.storage.table(table).delete(key)
+          await this.storage.table(table).delete(storageKey(key))
         } catch (err) {
           this.onWarn(`[lx-music-for-dsh] 画像裁剪失败: ${table}/${key}`, err)
         }
@@ -302,7 +303,7 @@ export class TasteStore {
     table[input.trackKey] = record as unknown as ProfileEntity
     this.cache.taste_tracks = table
     try {
-      await this.storage.table('taste_tracks').put(input.trackKey, record)
+      await this.storage.table('taste_tracks').put(storageKey(input.trackKey), record)
     } catch (err) {
       this.onWarn(`[lx-music-for-dsh] 曲目引用写入失败: ${input.trackKey}`, err)
     }
@@ -351,7 +352,7 @@ export class TasteStore {
     delete current[key]
     this.cache[table] = current
     try {
-      await this.storage.table(table).delete(key)
+      await this.storage.table(table).delete(storageKey(key))
     } catch (err) {
       this.onWarn(`[lx-music-for-dsh] 画像遗忘失败: ${table}/${key}`, err)
     }
@@ -389,7 +390,7 @@ export class TasteStore {
     const table = this.storage.table('taste_events')
     let day: { date: string; events: TasteEventRecord[] } = { date: key, events: [] }
     try {
-      const parsed = tasteEventDaySchema.safeParse(table.get(key))
+      const parsed = tasteEventDaySchema.safeParse(table.get(storageKey(key)))
       if (parsed.success) day = parsed.data
     } catch (err) {
       this.onWarn(`[lx-music-for-dsh] 事件桶读取失败，将重建: ${key}`, err)
@@ -424,7 +425,7 @@ export class TasteStore {
     const events = [...day.events, record]
     const trimmed = events.length > MAX_EVENTS_PER_DAY ? events.slice(events.length - MAX_EVENTS_PER_DAY) : events
     try {
-      await table.put(key, { date: key, events: trimmed })
+      await table.put(storageKey(key), { date: key, events: trimmed })
     } catch (err) {
       this.onWarn(`[lx-music-for-dsh] 事件写入失败: ${key}`, err)
     }
@@ -474,7 +475,7 @@ export class TasteStore {
 
   readState(): TasteStateRecord {
     try {
-      const parsed = tasteStateSchema.safeParse(this.storage.table('taste_state').get('summary'))
+      const parsed = tasteStateSchema.safeParse(this.storage.table('taste_state').get(storageKey('summary')))
       if (parsed.success) return parsed.data
     } catch (err) {
       this.onWarn('[lx-music-for-dsh] 画像状态读取失败', err)
@@ -484,7 +485,7 @@ export class TasteStore {
 
   async writeState(state: TasteStateRecord): Promise<void> {
     try {
-      await this.storage.table('taste_state').put('summary', state)
+      await this.storage.table('taste_state').put(storageKey('summary'), state)
     } catch (err) {
       this.onWarn('[lx-music-for-dsh] 画像状态写入失败', err)
     }

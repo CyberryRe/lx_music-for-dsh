@@ -14,6 +14,7 @@ import { SlidingWindowRateLimiter } from '../src/ratelimit'
 import { TasteRecorder } from '../src/taste/recorder'
 import { TasteStore } from '../src/taste/store'
 import { runWithPlayContext } from '../src/taste/origin'
+import { storageKey } from '../src/storage/keys'
 import { trackKey as makeKey } from '../src/taste/normalize'
 
 const T0 = Date.UTC(2026, 0, 15, 12, 0, 0)
@@ -62,7 +63,7 @@ function makeRecorder(): { recorder: TasteRecorder; storage: ReturnType<typeof f
 
 /** 取艺人实体的原始计数（比净分数更能表达"有没有记成负反馈"）。 */
 const artistEntity = (storage: ReturnType<typeof fakeStorage>, key: string): { implicit: number; plays: number; skips: number } =>
-  (storage.raw.get('taste_artists')?.get(key) as { implicit: number; plays: number; skips: number } | undefined) ?? {
+  (storage.raw.get('taste_artists')?.get(storageKey(key)) as { implicit: number; plays: number; skips: number } | undefined) ?? {
     implicit: 0,
     plays: 0,
     skips: 0,
@@ -71,7 +72,7 @@ const artistEntity = (storage: ReturnType<typeof fakeStorage>, key: string): { i
 const artistScore = (storage: ReturnType<typeof fakeStorage>, key: string): number => artistEntity(storage, key).implicit
 
 const trackStatus = (storage: ReturnType<typeof fakeStorage>, key: string): string | undefined =>
-  (storage.raw.get('taste_tracks')?.get(key) as { status?: string } | undefined)?.status
+  (storage.raw.get('taste_tracks')?.get(storageKey(key)) as { status?: string } | undefined)?.status
 
 describe('录制器：会话与结算', () => {
   it('完整播放 → 曲目与艺人各 +2，并升为 played', async () => {
@@ -107,7 +108,7 @@ describe('录制器：会话与结算', () => {
     })
     await settle()
     expect(artistScore(storage, '周杰伦')).toBeCloseTo(-0.3, 3)
-    const strategy = storage.raw.get('taste_tags')?.get('strategy:frustrated') as { implicit: number } | undefined
+    const strategy = storage.raw.get('taste_tags')?.get(storageKey('strategy:frustrated')) as { implicit: number } | undefined
     expect(strategy?.implicit).toBeCloseTo(-0.5, 3)
   })
 
@@ -213,7 +214,7 @@ describe('录制器：意图信号与来源归因', () => {
     recorder.noteIntent([music('晴天', '周杰伦')])
     await settle()
     expect(artistScore(storage, '周杰伦')).toBeCloseTo(1, 3) // 用户点歌的意图分
-    const track = storage.raw.get('taste_tracks')?.get('晴天|周杰伦') as { implicit: number } | undefined
+    const track = storage.raw.get('taste_tracks')?.get(storageKey('晴天|周杰伦')) as { implicit: number } | undefined
     expect(track?.implicit).toBeCloseTo(1.2, 3) // 排队 +0.2 与意图 +1.0
   })
 
@@ -222,7 +223,7 @@ describe('录制器：意图信号与来源归因', () => {
     runWithPlayContext({ origin: 'ai' }, () => recorder.noteIntent([music('晴天', '周杰伦')]))
     await settle()
     expect(artistScore(storage, '周杰伦')).toBe(0)
-    const track = storage.raw.get('taste_tracks')?.get('晴天|周杰伦') as { implicit: number } | undefined
+    const track = storage.raw.get('taste_tracks')?.get(storageKey('晴天|周杰伦')) as { implicit: number } | undefined
     expect(track?.implicit).toBeCloseTo(0.2, 3)
   })
 
@@ -232,7 +233,7 @@ describe('录制器：意图信号与来源归因', () => {
     recorder.noteProgress(1, 200, 'playing')
     recorder.notePlay(music('别的', '别人'))
     await settle()
-    const record = storage.raw.get('taste_tracks')?.get('新歌|新人') as { lastExploredAt?: number } | undefined
+    const record = storage.raw.get('taste_tracks')?.get(storageKey('新歌|新人')) as { lastExploredAt?: number } | undefined
     expect(record?.lastExploredAt).toBe(T0)
   })
 

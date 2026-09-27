@@ -1,20 +1,65 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { StorageFace } from '../playback'
+import { storageKey } from './keys'
 
 /**
  * 旧版（1.1.0 及更早）storage domain 的落盘文件：`$DSH_HOME/storages/lx_music.json`。
  *
  * 1.2.0 把 domain 从 `single` 换成 `per-record`（写放大 + 坏记录韧性，见
- * docs/design-taste-memory.md §2/§13）。JSON backend 的 "legacy bootstrap" 会从这份
- * 整份文件里播种**表记录**，但**不会迁移 `global`**——而播放列表/当前索引/音质/音量/
- * 静音/播放模式/设置全在 global 里，所以必须由本模块显式迁移。
+ * docs/design-taste-memory.md §2/§13）。**不能依赖 JSON backend 的 "legacy bootstrap"**：
+ *   1. 它只播种**表记录**、**不带 `global`**，而播放列表/当前索引/音质/音量/静音/播放模式/
+ *      设置全在 global 里；
+ *   2. 它把**旧文件的原始键直接当文件名**（`join(dir, table, `${key}.json`)`，不做转义），
+ *      而 `logs` 表的键是 ISO 时间戳（`2026-09-11T03:47:40.052Z`）——**Windows 文件名不允许冒号**，
+ *      于是 bootstrap 以 `ENOENT: rename '….tmp' -> '…2026-09-11T03:47:40.052Z.json'` 失败，
+ *      整个 `open()` 抛错、插件静默退化成内存存储（1.2.0 在桌面版实测踩到）。
+ *
+ * 因此改成"自己读 → 把旧文件改名搁置 → 再打开"：旧文件不在原路径，bootstrap 就不会触发，
+ * 迁移完全由本模块显式完成（键统一过 `storageKey()`）。
  */
 export function defaultDomainFile(source: NodeJS.ProcessEnv = process.env): string {
   const fromEnv = source.DSH_HOME
   const home = fromEnv && fromEnv.trim() ? fromEnv.trim() : join(homedir(), '.dsh')
   return join(home, 'storages', 'lx_music.json')
+}
+
+/** per-record 布局的目录（backend 以 domain 名做目录名）。 */
+export function perRecordDir(domainName: string, source: NodeJS.ProcessEnv = process.env): string {
+  return join(dirname(defaultDomainFile(source)), domainName)
+}
+
+/** 是否需要一次性迁移：per-record 目录还没建，但旧整份文件在。 */
+export function needsLegacyMigration(domainName: string, source: NodeJS.ProcessEnv = process.env): boolean {
+  return !existsSync(perRecordDir(domainName, source)) && existsSync(defaultDomainFile(source))
+}
+
+/**
+ * 把旧整份文件改名搁置（`.migrated-<时间戳>`，与音源文件迁移同一约定），返回新路径。
+ * 目的是让 backend 的 bootstrap 不触发；改名失败返回 undefined（调用方照常继续，只是迁移会跳过）。
+ */
+export function stashLegacyFile(source: NodeJS.ProcessEnv = process.env): string | undefined {
+  const file = defaultDomainFile(source)
+  if (!existsSync(file)) return undefined
+  const target = `${file}.migrated-${Date.now()}`
+  try {
+    renameSync(file, target)
+    return target
+  } catch {
+    return undefined
+  }
+}
+
+/** 还原搁置的旧文件（打开失败时回滚，保证用户数据始终在原位、旧版本仍能读回）。 */
+export function restoreLegacyFile(stashed: string | undefined, source: NodeJS.ProcessEnv = process.env): boolean {
+  if (!stashed) return false
+  try {
+    renameSync(stashed, defaultDomainFile(source))
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** 旧版整份文件的形状：`{ unit: { name, version }, global: {...}|null, tables: { <表>: { <键>: 值 } } }`。 */
@@ -75,7 +120,10 @@ export interface MigrationOptions {
   target: StorageFace
   /** 新 domain 声明了哪些表（旧文件里多出来的表会被忽略）。 */
   specTables: readonly string[]
+  /** 旧文件路径（仅用于日志与兜底读取）。 */
   legacyPath: string
+  /** 已经读出来的旧数据（index.ts 在打开 domain 之前就读好了，避免 backend bootstrap 抢跑）。 */
+  legacy?: LegacyWholeUnit
   now?: () => number
   log?: (message: string) => void
   warn?: (message: string) => void
@@ -124,7 +172,7 @@ export async function migrateLegacyDomain(options: MigrationOptions): Promise<Mi
     return { migrated: false, reason: 'already-migrated' }
   }
 
-  const legacy = readLegacyWholeUnit(options.legacyPath)
+  const legacy = options.legacy ?? readLegacyWholeUnit(options.legacyPath)
   if (!legacy) return { migrated: false, reason: 'no-legacy-file' }
 
   // 1) 表记录：按键覆盖写，天然幂等
@@ -136,7 +184,8 @@ export async function migrateLegacyDomain(options: MigrationOptions): Promise<Mi
       const table = options.target.table(name)
       let written = 0
       for (const [key, value] of Object.entries(rows)) {
-        await table.put(key, value)
+        // 旧文件的键直接当文件名会踩 Windows 非法字符（ISO 时间戳里的冒号），必须转义
+        await table.put(storageKey(key), value)
         written += 1
       }
       if (written > 0) counts[name] = written
