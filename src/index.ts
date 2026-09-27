@@ -15,6 +15,7 @@ import { TasteStore } from './taste/store'
 import { TasteRecorder } from './taste/recorder'
 import { TasteFacade } from './taste/facade'
 import { registerTasteTools } from './taste/tools'
+import { TASTE_SKILL, TASTE_SKILL_NAME } from './taste/skill'
 import { defaultDomainFile, migrateLegacyDomain } from './storage/migrate'
 
 export const name = 'lx-music-for-dsh'
@@ -130,6 +131,8 @@ function toSettings(config: Record<string, unknown>): PluginSettings {
 export async function apply(ctx: {
   tools: { register(tool: unknown): void }
   storageDomain?: { open(spec: unknown): Promise<unknown> }
+  /** 可选注入钩子：skill 服务在旧版/精简宿主里可能不存在，用作用域注入避免拖垮插件激活。 */
+  inject?: (deps: string[], fn: (scoped: { skills?: { register(skill: unknown): () => void } }) => void) => unknown
   logger?: { warn(...args: unknown[]): void }
 }, rawConfig: Record<string, unknown>): Promise<void> {
   const settings = toSettings(rawConfig)
@@ -253,6 +256,18 @@ export async function apply(ctx: {
       },
     })
   }
+
+  // 插件自带的 skill：把"先查画像 → 精确播放"的流程随插件版本一起发布。
+  // 用作用域注入（而不是写进 inject 数组）：skill 服务在旧版/精简宿主里可能不存在，
+  // 写进 inject 会让整个插件拒绝激活，而作用域注入只在该服务可用时才跑回调。
+  ctx.inject?.(['skills'], (scoped) => {
+    try {
+      scoped.skills?.register(TASTE_SKILL)
+      console.info(`[lx-music-for-dsh] 已注册 skill: ${TASTE_SKILL_NAME}`)
+    } catch (err) {
+      logger.warn('[lx-music-for-dsh] skill 注册失败（不影响其它功能）:', err)
+    }
+  })
 
   // 插件卸载时释放音源子进程（避免孤儿进程）并结算当前画像会话
   const disposeHook = (ctx as { on?: (event: string, fn: () => void) => void }).on

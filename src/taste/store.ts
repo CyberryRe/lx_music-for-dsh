@@ -368,6 +368,17 @@ export class TasteStore {
     return keys
   }
 
+  /** 冷却期内探索过的曲目 key 集合（同一首歌不重复探索，§18.2 去重窗口）。 */
+  recentlyExplored(now: number, days: number): Set<string> {
+    const cutoff = now - days * DAY_MS
+    const keys = new Set<string>()
+    for (const [key, value] of Object.entries(this.load('track'))) {
+      const record = value as StoredTrack
+      if (record.lastExploredAt !== undefined && record.lastExploredAt >= cutoff) keys.add(key)
+    }
+    return keys
+  }
+
   // -------------------------------------------------------------------------
   // 事件流（唯一真源）
   // -------------------------------------------------------------------------

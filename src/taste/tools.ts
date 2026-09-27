@@ -11,6 +11,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { MusicInfo, PlayLogEntry, Quality } from '../shared/types'
 import type { PlaybackService } from '../playback'
 import { explicitDelta } from './events'
+import { EXPLORE_COOLDOWN_DAYS, EXPLORE_MAX_CANDIDATES, EXPLORE_MAX_SEEDS, rankUnheardCandidates } from './explore'
 import { normalizeArtist, pickBestMatch, secondsFromInterval, trackKey as makeKey, type VariantKind } from './normalize'
 import { runWithPlayContext } from './origin'
 import type { TasteStore } from './store'
@@ -87,9 +88,15 @@ function buildProfileTool(options: TasteToolsOptions): ReturnType<typeof defineT
     description:
       '查看用户的音乐口味画像（本地统计，不含原始播放记录）。' +
       '主动为当前情境点歌前先调用它拿候选，再用 music_play_song 精确播放。' +
-      'view：digest=摘要 / artists=常听艺人 / tracks=可直取的曲目 / for-mood=某个情绪下的偏好。',
+      'view：digest=摘要 / artists=常听艺人 / tracks=可直取的曲目 / for-mood=某个情绪下的偏好 /' +
+      'explore-brief=推荐"没听过但在口味范围内"的歌（返回确定候选，挑一首用 music_play_song 的 mode=explore 播放）。',
     parameters: {
-      view: { type: 'string', enum: ['digest', 'artists', 'tracks', 'for-mood'], required: true, description: '要看的视图。' },
+      view: {
+        type: 'string',
+        enum: ['digest', 'artists', 'tracks', 'for-mood', 'explore-brief'],
+        required: true,
+        description: '要看的视图。explore-brief=为"推荐没听过的歌"给出种子与候选。',
+      },
       mood: { type: 'string', description: 'for-mood 用：情境关键词（frustrated/stuck/happy/focused 或自由文本）。' },
       limit: { type: 'integer', description: '候选数上限（受预算档位限制）。' },
     },
@@ -132,6 +139,80 @@ function buildProfileTool(options: TasteToolsOptions): ReturnType<typeof defineT
       const tracks = store.top('track', { now: ts, halfLifeDays: memory.halfLifeDays, limit })
       const state = store.readState()
       const mood = args.mood?.trim()
+
+      // ── explore-brief：推荐"没听过但在口味范围内"的歌 ─────────────────────
+      // 候选来源①「同艺人未听曲目」：按常听艺人的名字搜索，天然落在喜好范围内，不需要标签。
+      // 置信度门控用 proactive（medium+）：样本太少的艺人不足以代表口味，不该拿来探索。
+      if (args.view === 'explore-brief') {
+        const seeds = store.top('artist', { now: ts, halfLifeDays: memory.halfLifeDays, limit: EXPLORE_MAX_SEEDS, minPurpose: 'proactive' })
+        if (seeds.length === 0) {
+          return {
+            view: 'explore-brief',
+            summary: '还没有足够的数据做探索（需要某位艺人至少 5 次收听证据）。先多听几首，或直接问用户想听什么。',
+            artists: [],
+            tracks: [],
+            sampleSize: 0,
+            note: '探索是"推荐没听过的歌"，样本不足时容易推偏；此时改用 music_play_song({title,artist}) 播用户点名的歌更稳。',
+          }
+        }
+        const resultsBySeed = new Map<string, Array<{ name: string; singer: string; source: string; id: string; albumName?: string; interval?: string }>>()
+        await Promise.all(
+          seeds.map(async (seed) => {
+            try {
+              const outcome = await options.service.search({ query: seed.raw ?? seed.key, limit: 10 })
+              resultsBySeed.set(
+                seed.key,
+                outcome.results.map((m) => ({
+                  name: m.name,
+                  singer: m.singer,
+                  source: m.source,
+                  id: m.id,
+                  ...(m.meta?.albumName ? { albumName: m.meta.albumName } : {}),
+                  ...(m.interval ? { interval: m.interval } : {}),
+                })),
+              )
+            } catch {
+              // 单个种子搜索失败不影响其它种子
+            }
+          }),
+        )
+        const candidates = rankUnheardCandidates({
+          seeds: seeds.map((s) => ({ key: s.key, raw: s.raw ?? s.key, score: s.score, confidence: s.confidence })),
+          resultsBySeed,
+          playedKeys: store.playedKeys(),
+          recentlyExplored: store.recentlyExplored(ts, EXPLORE_COOLDOWN_DAYS),
+          limit: Math.max(1, Math.min(EXPLORE_MAX_CANDIDATES, limit)),
+        })
+        return {
+          view: 'explore-brief',
+          summary:
+            candidates.length > 0
+              ? `探索建议：从常听的 ${seeds.map((s) => s.raw ?? s.key).join('、')} 里挑了 ${candidates.length} 首你还没听过的。`
+              : `常听的 ${seeds.map((s) => s.raw ?? s.key).join('、')} 暂时没有可探索的新曲目（都听过或在冷却期内）。`,
+          artists: seeds.map((s) => ({
+            name: s.raw ?? s.key,
+            score: s.score,
+            plays: s.plays,
+            skips: s.skips,
+            confidence: s.confidence,
+            reason: trimReason(`${s.plays} 次播放`, budget.reasons),
+          })),
+          tracks: candidates.map((c) => ({
+            title: c.title,
+            artist: c.artist,
+            source: c.source,
+            id: c.id,
+            score: c.score,
+            status: 'unheard',
+            reason: trimReason(c.reason, budget.reasons),
+          })),
+          sampleSize: seeds.reduce((sum, s) => sum + s.plays + s.skips, 0),
+          note:
+            candidates.length > 0
+              ? '这些是**没听过**的同艺人曲目。挑一首最契合当前情境的，用 music_play_song({title,artist,mode:"explore"}) 播放——探索模式下若被切走，对艺人的负反馈会大幅打折。'
+              : '没有可探索的新曲目时，不要硬凑：可以换成复听，或问用户想听什么。',
+        }
+      }
 
       const artistRows = artists.map((a) => ({
         name: a.raw ?? a.key,

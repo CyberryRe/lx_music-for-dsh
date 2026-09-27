@@ -18,15 +18,19 @@ Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
 - **细粒度 LLM 音乐工具集**：`music_search`（搜索）/ `music_play`（播放）/ `music_playlist`
   （播放列表管理）/ `music_prev` / `music_next` / `music_control`（暂停、音量、音质、播放模式等），
   另保留兼容入口 `search_and_play`（一步点歌）；内置滑动窗口防刷（默认 6 次/分钟）与带 action 的操作日志。
-- **音乐画像（1.2.0）**：`music_profile`（读口味画像与"可直取"的曲目候选）/
+- **音乐画像（1.2.0）**：`music_profile`（读口味画像与"可直取"的曲目候选；`for-mood` 看某情境下的
+  偏好，`explore-brief` 给"没听过但在口味范围内"的确定候选）/
   `music_play_song`（**精确点播**一首确定的歌：优先用画像里已确认的平台 id 零搜索播放，
   退化到按曲名+艺人严格确认，确认不到就明确失败——不会拿翻唱或别的版本顶替）/
   `music_taste`（读写口味：`like`/`dislike`/`forget`/`note`/`summary`）。
   画像由本地算法从真实收听行为中生长（完整播放 +2、AI 放的被切走只按 0.3 记艺人维度、
   探索失败再打 0.25 折），**只在终态落库**（每秒的进度回调不写盘），全部在本地处理、不上传。
+  另随插件注册一个 skill（`taste-aware-picking`），把"先查画像 → 挑一首确定的歌 → 精确播放"
+  的流程版本化；它**只在被触发时加载**，平时不占 token。
 
-> 状态持久化（播放列表/音量/音质/播放模式/点歌日志/音源脚本）走 DSH storage domain
-> （`$DSH_HOME/storages/lx_music.json`）；storage domain 不可用时降级为内存 + 音源文件兜底，
+> 状态持久化（播放列表/音量/音质/播放模式/点歌日志/音源脚本/画像）走 DSH storage domain
+> （1.2.0 起为 per-record 布局：`$DSH_HOME/storages/lx_music/` 目录，旧 `lx_music.json` 会被
+> 自动迁移且原样保留）；storage domain 不可用时降级为内存 + 音源文件兜底，
 > 并在启动日志与 stderr 明确告警。
 
 ## 架构
@@ -131,7 +135,7 @@ manifest.json     插件清单（元数据：入口、生命周期、工具、�
 src/index.ts      host 入口
 src/client.ts     client 入口
 src/ui/           React 组件
-tests/            单元测试（320 例）
+tests/            单元测试（341 例）
 docs/             开发文档 / DSH 与 LX Music 研读笔记
 ```
 

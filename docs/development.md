@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（320 例） |
+| `npm test` | 编译并运行全部单元测试（341 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -422,6 +422,11 @@ npm test    # = compile-tests + node --test --test-isolation=none --test-concurr
 #                 taste 的 like/dislike/forget/note/summary 与关闭态返回 ok=false
 #   taste-facade   画像门面（UI/Remote 的读写面）：视图/证据列表/写操作/配置持久化，
 #                 以及**关掉开关后立刻停止录制**（不需要重启）、配置写入失败仍本次生效
+#   taste-explore  探索（同艺人未听曲目）：排除已听与冷却期内的、**不把翻唱/Live 当新歌**、
+#                 过滤搜索噪声（别的艺人）、跨种子轮流取保证多样性；工具的 explore-brief 视图
+#                 （样本不足时明说"数据不够"而不是硬凑、画像关闭时不做任何搜索）
+#   taste-skill    自带 skill：名字 kebab-case、描述可路由、正文覆盖完整流程且**有长度预算**、
+#                 走**真实 cordis 作用域注入**注册（服务缺失时 apply 仍正常、注册抛错只告警）
 ```
 
 可选真实网络冒烟（五平台搜索，需外网）：
@@ -437,7 +442,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（320 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（341 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）
