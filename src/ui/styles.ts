@@ -38,14 +38,23 @@ export const CSS = `
 .lxm-controls { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 .lxm-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; border: none; border-radius: 6px; cursor: pointer;
+  /* 用 min-width（而不是固定 width）+ nowrap：图标按钮仍是 26px 见方，但文字按钮会自然撑开。
+     曾经用固定 width，导致独立放置的文字按钮被挤成**竖排文字**并溢出、与相邻内容交叠
+     （tests/ui-styles.test.ts 把这条约定钉住了）。 */
+  min-width: 26px; height: 26px; border: none; border-radius: 6px; cursor: pointer;
   background: transparent; color: var(--dsw-alias-label-secondary, #bbb); font-size: 14px;
-  padding: 0;
+  padding: 0 4px; white-space: nowrap;
 }
 .lxm-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.15)); color: var(--dsw-alias-label-primary, #e6e6e6); }
 .lxm-btn-primary { color: var(--dsw-alias-state-business-primary, #4c8dff); }
 .lxm-btn:disabled { opacity: 0.4; cursor: default; }
 .lxm-btn-mode { width: auto; min-width: 26px; padding: 0 2px; font-size: 12px; }
+/* 文字按钮：自带「按钮框」，不依赖父容器（放进 .lxm-toolbar 也保持一致）。 */
+.lxm-btn-text {
+  width: auto; height: auto; padding: 4px 10px; font-size: 12px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.2));
+  border-radius: 6px;
+}
 .lxm-btn-row { display: flex; gap: 2px; }
 .lxm-modes {
   display: inline-flex; gap: 2px; padding: 2px; flex: none;

@@ -79,6 +79,7 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
 
           <div className="lxm-toolbar" style={{ marginTop: 'auto' }}>
             <button
+              type="button"
               className="lxm-search-btn"
               disabled={busy}
               onClick={() => {
@@ -94,7 +95,8 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
               开启画像
             </button>
             <button
-              className="lxm-btn"
+              type="button"
+              className="lxm-btn lxm-btn-text"
               disabled={busy}
               onClick={() => {
                 void store.tasteAction({ action: 'snooze' }).then(() => store.closeTaste())
@@ -103,7 +105,8 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
               稍后再说
             </button>
             <button
-              className="lxm-btn"
+              type="button"
+              className="lxm-btn lxm-btn-text"
               disabled={busy}
               onClick={() => {
                 void store
@@ -154,6 +157,7 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
               onChange={(e) => setSeed(e.target.value)}
             />
             <button
+              type="button"
               className="lxm-search-btn"
               disabled={busy || !seed.trim()}
               onClick={() => {
@@ -182,6 +186,7 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
                     </div>
                   </div>
                   <button
+                    type="button"
                     className="lxm-btn"
                     title="让画像忘掉这位艺人"
                     disabled={busy}
@@ -254,6 +259,7 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
                 <div className="lxm-field-hint">关闭后立刻停止记录（不需要重启），已有数据仍然保留。</div>
               </div>
               <button
+                type="button"
                 className="lxm-switch"
                 data-on={config?.enabled ?? false}
                 disabled={busy}
@@ -336,6 +342,7 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
               <div className="lxm-toolbar">
                 <span className="lxm-field-hint">确定清空全部画像数据？</span>
                 <button
+                  type="button"
                   className="lxm-search-btn"
                   disabled={busy}
                   onClick={() => {
@@ -344,14 +351,17 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
                 >
                   确定清空
                 </button>
-                <button className="lxm-btn" onClick={() => setConfirmClear(false)}>
+                <button type="button" className="lxm-btn lxm-btn-text" onClick={() => setConfirmClear(false)}>
                   取消
                 </button>
               </div>
             ) : (
-              <button className="lxm-btn" disabled={busy} onClick={() => setConfirmClear(true)}>
-                清空全部画像数据
-              </button>
+              <div className="lxm-toolbar">
+                <button type="button" className="lxm-btn lxm-btn-text" disabled={busy} onClick={() => setConfirmClear(true)}>
+                  清空全部画像数据
+                </button>
+                <span className="lxm-field-hint">只清空画像，不影响播放列表与音源。</span>
+              </div>
             )}
           </div>
           {snapshot.tasteNotice ? <div className="lxm-field-hint">{snapshot.tasteNotice}</div> : null}
