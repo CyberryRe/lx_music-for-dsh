@@ -10,6 +10,7 @@ import { registerMusicTools } from './tools'
 import { SlidingWindowRateLimiter } from './ratelimit'
 import { DEFAULT_SETTINGS, type PluginSettings } from './shared/types'
 import { memoryConfigSchema } from './taste/config'
+import { storedArtistSchema, storedTagSchema, storedTrackSchema, tasteEventDaySchema, tasteStateSchema } from './taste/schema'
 import { defaultDomainFile, migrateLegacyDomain } from './storage/migrate'
 
 export const name = 'lx-music-for-dsh'
@@ -102,6 +103,14 @@ export const domainSpec = defineDomain({
     ),
     // 记录形状 = 裸 id 数组（键固定为 'order'，见 engine/sourceStore.ts）。
     source_order: domainTable(zod.array(zod.string())),
+    // ---- 音乐画像（1.2.0）----
+    // 事件按天分桶（键 = YYYY-MM-DD）：per-record 布局下一条事件一个文件会产生几千个小文件，
+    // 按天分桶后是"每天一个文件"，裁剪只是删键。
+    taste_events: domainTable(tasteEventDaySchema),
+    taste_tracks: domainTable(storedTrackSchema),
+    taste_artists: domainTable(storedArtistSchema),
+    taste_tags: domainTable(storedTagSchema),
+    taste_state: domainTable(tasteStateSchema),
   },
 })
 

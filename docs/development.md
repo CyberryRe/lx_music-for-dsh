@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（221 例） |
+| `npm test` | 编译并运行全部单元测试（255 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -407,6 +407,11 @@ npm test    # = compile-tests + node --test --test-isolation=none --test-concurr
 #                 pickBestMatch 无合格候选时返回 undefined（绝不取第 0 个）
 #   taste-profile  指数衰减（半衰期数学、增量与一次性重算等价）、**explicit 不衰减**（时间旅行测试）、
 #                 plays/skips 计数、置信度门控（low 不许主动推荐）、排序确定性、事件裁剪
+#   taste-schema   画像表的持久层 schema：真实 MusicInfo（含 tx 私有字段）被接受且**保留私有字段**、
+#                 未知音质/坏枚举被拒、五张表都已在 domainSpec 里（防止只改一边）
+#   taste-store    聚合落盘与排行、**seen/played 分离**（探索池的前提）、多平台引用与 Tier-1 直取、
+#                 事件按天分桶/单日上限/保留窗口裁剪、探索统计、一键清空，
+#                 以及**"store 真实写出的每条记录都能被 domain schema 接受"**（形状漂移的正面锁）
 ```
 
 可选真实网络冒烟（五平台搜索，需外网）：
@@ -422,7 +427,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（221 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（255 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）
