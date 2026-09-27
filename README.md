@@ -81,12 +81,12 @@ node scripts/install-to-dsh.mjs            # 打包 + dsh plugin add + 旧版残
 ### 给使用者的两种安装方式
 
 ```bash
-# 方式一：npm（推荐；latest 与 lts 都指向 1.1.0）
-npm i lx-music-for-dsh@1.1.0
-dsh plugin --profile web add lx-music-for-dsh@1.1.0
+# 方式一：npm（推荐）
+npm i lx-music-for-dsh@1.2.0
+dsh plugin --profile web add lx-music-for-dsh@1.2.0
 
 # 方式二：GitHub Release 的预构建包（离线可用，不需要构建脚本、不需要 allowBuilds）
-pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.1.0/lx-music-for-dsh-1.1.0.tgz
+pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.2.0/lx-music-for-dsh-1.1.0.tgz
 ```
 
 > ✅ **1.1.0 同时兼容 DSH 0.1.5 与 0.1.7**（client 面同时携带两代 codec 契约），所以默认装最新版即可，
@@ -143,17 +143,18 @@ docs/             开发文档 / DSH 与 LX Music 研读笔记
 
 | 插件版本 | DSH 版本 | 说明 |
 |---|---|---|
-| **1.1.0** | **`@deepseek-ai/dsh` 0.1.5 ～ 0.1.7 均可** | **双契约**：client 面同时携带 0.1.5 的 `codec.schema` 与 0.1.7 的 `create()`；并修复桌面版（Electron 宿主）音源校验/导入子进程以 `code=0` 退出 |
+| **1.2.0** | **`@deepseek-ai/dsh` 0.1.5 ～ 0.1.7 均可** | **音乐画像**（本地口味记忆 + 精确点播 + 探索）+ 「我的口味」窗口 + 自带 skill；存储布局从 `single` 换成 `per-record`（启动时自动迁移，旧文件保留），启用 `invalidRecords=backup-and-skip` |
+| 1.1.0 | 同上（双契约） | **双契约**：client 面同时携带 0.1.5 的 `codec.schema` 与 0.1.7 的 `create()`；并修复桌面版（Electron 宿主）音源校验/导入子进程以 `code=0` 退出 |
 | 1.0.2 | 仅 0.1.7 及以后 | strict codec 的 `schema` → `create()`（0.1.5 及更早**不兼容**） |
 | 1.0.1 | 仅 0.1.5 及更早 | `dsh.bundle` 组合层，一条命令安装（0.1.7 上**不兼容**） |
 | 1.0.0 | `@deepseek-ai/dsh@0.1.0-rc.6` | 需手工写 profile patch 行 |
 
-**从 1.0.x 升级到 1.1.0 不需要动 DSH 版本**，也不必迁移数据（插件配置与
-`$DSH_HOME/storages/lx_music.json` 格式都没变）。1.1.0 之后同一条线可以继续服务
-0.1.5 与 0.1.7 两代运行时，因此它同时挂在 npm 的 `latest` 与 `lts` 两个 dist-tag 上：
+**从 1.0.x/1.1.0 升级到 1.2.0 不需要动 DSH 版本**，插件配置格式没变；只有存储布局变了，
+插件会在启动时**自动迁移**（旧的 `lx_music.json` 原样保留，可随时回退）。1.1.0 之后同一条线可以继续服务
+0.1.5 与 0.1.7 两代运行时，因此它也挂在 npm 的 `latest` 与 `lts` 两个 dist-tag 上：
 
 ```bash
-npm i lx-music-for-dsh@latest   # 或 @lts，两者都是 1.1.0
+npm i lx-music-for-dsh@latest   # 或 @lts
 ```
 
 ### 为什么之前需要"按 DSH 版本配对安装"

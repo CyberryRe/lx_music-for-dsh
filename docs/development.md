@@ -189,7 +189,7 @@ node scripts/install-to-dsh.mjs --dry-run       # 只看会做什么
 
 ```bash
 npm run pack
-dsh plugin --profile web add D:\deepseek_harness\lx_plugin\dist\lx-music-for-dsh-1.1.0.tgz
+dsh plugin --profile web add D:\deepseek_harness\lx_plugin\dist\lx-music-for-dsh-1.2.0.tgz
 ```
 
 重启 `dsh web`，刷新浏览器：
@@ -258,7 +258,7 @@ v2.12.2 保持一致：100% 由音源脚本提供。
 **推荐做法**——直接装 tag 上附带的预构建 tarball（不需要任何构建，也不需要 `allowBuilds`）：
 
 ```bash
-pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.1.0/lx-music-for-dsh-1.1.0.tgz
+pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.2.0/lx-music-for-dsh-1.1.0.tgz
 ```
 
 桌面版插件管理器的「从 URL 安装」也可以直接填上面这个 URL。实测：`pnpm install` 11 秒装好、
@@ -488,10 +488,31 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 
 | 插件版本 | DSH 版本 | 说明 |
 |---|---|---|
-| **1.1.0** | **0.1.5 ～ 0.1.7 均可** | **双契约**（codec 同时带 `schema` 与 `create()`）+ **桌面版 Electron 沙箱修复**（`ELECTRON_RUN_AS_NODE`）；dist-tag `latest` 与 `lts` 都指向它 |
+| **1.2.0** | **0.1.5 ～ 0.1.7 均可** | **音乐画像**：本地口味记忆（`music_profile` / `music_play_song` 精确点播 / `music_taste`）+「我的口味」窗口 + 自带 skill；**存储布局 single → per-record**（启动时自动迁移，旧文件保留）+ `invalidRecords=backup-and-skip` |
+| 1.1.0 | 0.1.5 ～ 0.1.7 均可 | **双契约**（codec 同时带 `schema` 与 `create()`）+ **桌面版 Electron 沙箱修复**（`ELECTRON_RUN_AS_NODE`） |
 | 1.0.2 | `@deepseek-ai/dsh@0.1.7-rc.2` | **client 面契约适配**：Typert strict codec 的 `schema` → `create()`；descriptor 类型改绑 DSH 真实协议类型；`link-dsh.mjs` 支持显式来源 + 桌面版版本漂移比对 |
 | 1.0.1 | `@deepseek-ai/dsh@0.1.5-rc.1`（随包依赖 `*-0.1.5-rc.2`） | 声明 `dsh.bundle.patch`，`dsh plugin add` 一条命令激活；`dsh.client.inject` 修正为现存包；client externals 对齐 0.1.5 基线模块表；**修复 storage domain schema 导致的持久化静默失效** |
 | 1.0.0 | `@deepseek-ai/dsh@0.1.0-rc.6` | 需要手工在 profile `cordis.patch.yml` 里 insert 插件行 |
+
+### 10.0 1.2.0：音乐画像 + 存储布局切换
+
+**(1) 存储布局 single → per-record（升级时自动迁移）。** 旧版整个 domain 是一份
+`$DSH_HOME/storages/lx_music.json`，**每次写都重写整份**；画像要频繁写事件与聚合表，
+写放大不可接受。新版是 `lx_music/` 目录（一条记录一个文件）。
+
+为什么不能只靠 backend 的 "legacy bootstrap"（实测见 docs/design-taste-memory.md §2）：
+它会从旧整份文件播种**表记录**，但**不带 `global`**——而播放列表/当前索引/音质/音量/静音/
+播放模式/设置全在 global 里；而且它只在"新目录完全为空"时生效，任何提前写入都会让它失效。
+所以 `apply()` 里做了**显式迁移**：先写表记录（按键覆盖，幂等），最后写 global 与幂等标记
+`global.memory.migratedFrom`；失败不写标记、下次启动重试；**旧文件绝不修改或删除**（可回退）。
+
+**(2) `invalidRecords: 'backup-and-skip'`（与 per-record 绑定）。** 某条记录不匹配 schema 时
+改名为 `<键>.json.bak.<时间戳>` 并跳过，**不再让整个 `open` 失败**。这条只在 per-record 下有效
+（single 只有一份文档，无法"把单条记录挪走"）——1.0.1 的事故正是 single 下一条坏记录让持久化
+整体失效。这两条都有回归测试（`tests/domain-backend.test.ts` 用真实 JSON backend 复现）。
+
+**(3) 音乐画像。** 设计与验证结论见 `docs/design-taste-memory.md`；
+人工实测清单见 §9.1（升级路径本身也要验）。
 
 ### 10.1 1.1.0：双契约（一份产物兼容两代 DSH）+ 桌面版沙箱修复
 
