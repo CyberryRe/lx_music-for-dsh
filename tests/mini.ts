@@ -3,8 +3,23 @@
 
 import { describe, it, mock, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 export { describe, it, afterEach }
+
+// ── 测试隔离：绝不让测试写到用户真实的 $DSH_HOME ──────────────────────────────
+//
+// 事故：`apply()` 会把激活过程写入 `$DSH_HOME/lx-music-plugin-status.json`（插件自诊断），
+// 而 `host.integration` / `taste-skill` 等用例直接调用 `apply` 且没有隔离 DSH_HOME ——
+// 结果测试把状态记录写进了**用户真实的** `~/.dsh`，把真实诊断信息挤掉（也让排查的人
+// 误以为应用处于内存模式）。这里在测试进程启动时就把 DSH_HOME 指向临时目录，
+// 需要断言状态文件的用例再用 `withTempHome` 单独指定自己的临时目录。
+const currentHome = process.env.DSH_HOME ?? ''
+if (!currentHome || !currentHome.startsWith(tmpdir())) {
+  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'lx-test-home-'))
+}
 
 /** vi 兼容 shim（仅测试用到的子集）。 */
 export const vi = {

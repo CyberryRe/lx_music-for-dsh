@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（368 例） |
+| `npm test` | 编译并运行全部单元测试（369 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -408,6 +408,29 @@ single 下一条坏记录就会让整个 domain 打不开、播放列表/设置�
 旧版插件即可继续读取。
 （但**新版写入的状态会丢**，回退前先备份）。
 
+### 7.2 插件自带的 skill 装在哪里（安装时会不会落地文件）
+
+**不会落地任何文件。** 插件 host 半边在每次激活时调用 `ctx.skills.register(TASTE_SKILL)`
+（`src/taste/skill.ts`，`source: 'runtime'`），技能因此是**内存注册**的：
+
+- 装插件 → 技能自动可用，无需手动拷贝（这是"自动安装 skill"的全部含义）；
+- 停用/卸载插件 → 技能随之消失，不会在磁盘上留残留；
+- 内容随插件版本走：打包进 `lib/index.js`（包的 `files` 只有 `lib/`、`cordis.patch.yml`、
+  `manifest.json`、`README.md`，**没有独立的 skill 文件**），改技能文案要重新打包。
+
+DSH 里技能有两种来源（`@deepseek-ai/dsh-skill` 的 provider 体系）：
+
+| 来源 | 落盘位置 | 形态 |
+|---|---|---|
+| `runtime`（本插件） | **无**（进程内存） | `{ name, description, content, metadata }` |
+| `filesystem`/`bundled` | `$DSH_HOME/skills/<技能名>/`（用户级）、`<项目>/.dsh/skills`、`<项目>/.agents/skills`、`customSkillDirs` 配置项 | 目录包（`SKILL.md` + `meta.yaml` + `references/`）或单个 Markdown |
+
+所以想"改插件技能"要改代码重新打包；想加自己的技能（例如 `vibe-music`）就往
+`$DSH_HOME/skills/<名字>/` 放一个目录。
+
+> 相关：`ctx.inject(['skills'], cb)` 是**作用域**注入（不是 `inject` 必需依赖），
+> 因为 skill 服务在精简宿主里可能不存在——见 §4.1.1 第 1 条。
+
 设置窗口的修改会持久化到该 domain（`global.settings`），
 优先于行配置。该 domain 的 schema 是**持久层读边界校验**：任一条存储记录不匹配就会让整个
 `open` 失败、插件降级为内存存储，因此改动 schema 必须与代码实际写入的形状逐字段对齐
@@ -500,7 +523,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（368 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（369 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）

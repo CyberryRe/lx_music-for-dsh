@@ -71,6 +71,11 @@ function readStatus(home: string): { history: Array<Record<string, unknown>> } |
 }
 
 describe('配置校验：行配置缺省也必须能激活', () => {
+  it('测试进程的 DSH_HOME 必须被隔离到临时目录（否则会把诊断写进用户真实 ~/.dsh）', () => {
+    // 由 tests/mini.ts 在测试进程启动时设置；这条是"别把隔离拆掉"的锁。
+    expect(String(process.env.DSH_HOME ?? '').startsWith(tmpdir())).toBe(true)
+  })
+
   it('PLUGIN_VERSION 与 package.json 一致（状态文件靠它确认装的是哪一版）', () => {
     const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')) as { version: string }
     expect(PLUGIN_VERSION).toBe(pkg.version)
