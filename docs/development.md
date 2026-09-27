@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（160 例） |
+| `npm test` | 编译并运行全部单元测试（221 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -133,6 +133,25 @@ npm run build
 #                   external = DSH 客户端基线模块表：react/react-dom/cordis/dsh-client-ui-slots/...）
 npm run pack        # 生成 lx-music-for-dsh-<version>.tgz
 ```
+
+### 5.1 发布流程（硬性门槛：先本地实测，再发包）
+
+**不要写完就发。** 发包（`git tag` → CI `npm publish` → GitHub Release）之前必须先在本地把
+候选版本装上跑一遍，否则一旦有回归就只能靠 `npm deprecate` 补救，版本号也被浪费掉。
+
+```bash
+# 1) 出候选包（不推 tag、不 publish）
+npm run build && npm run pack          # → dist/lx-music-for-dsh-<version>.tgz
+# 2) 装进 web profile 实测（依赖写成 file: 指向绝对路径，pnpm 不会去 registry 找）
+#    dsh web 侧：profile 的 package.json 里 "lx-music-for-dsh": "file:D:/deepseek_harness/lx_plugin/dist/lx-music-for-dsh-<version>.tgz"
+#    桌面版：同样用 file: 装，然后重启应用（Electron 主进程需要重启才生效）
+# 3) 实测清单见 §9；通过后才：
+#    git tag -a v<version> -m "..." && git push origin v<version>   # 触发 CI 校验 + publish
+#    并把 tarball 传成 Release asset（GitHub 安装路径依赖它，见 §6.4）
+```
+
+发布前还要过一遍 §9 的验收清单；`1.2.0` 起 storage 布局变了，**升级路径本身也要实测**
+（旧 `lx_music.json` → per-record 的迁移，见 §7.1），建议用一份真实的老数据来验。
 
 ## 6. 安装到 DSH（web 模式）
 
@@ -381,6 +400,13 @@ npm test    # = compile-tests + node --test --test-isolation=none --test-concurr
 #                 失败不写标记（下次重试）、**绝不修改旧文件**、新值优先的合并策略
 #   domain-backend  真实 JSON backend 落盘行为：per-record 下坏记录被改名备份且 open 存活（幂等）、
 #                 single 下同一条坏记录让整个 open 失败（1.2.0 离开 single 的原因）
+#   taste-events   信号表与归因三拆：完整/部分/切走、AI 切走只按 0.3 记艺人维度、探索负反馈再乘 0.25、
+#                 重播加成、情绪×艺人关联、标签 key 构造与本地时段划分
+#   taste-normalize  归一化与版本识别（样例取自五平台真实搜索结果）：曲名后缀剥离、多人合唱取主艺人、
+#                 全角半角、时长解析、**严格匹配拒绝 RyaVocal 翻唱与时长不符的 Live 版**、
+#                 pickBestMatch 无合格候选时返回 undefined（绝不取第 0 个）
+#   taste-profile  指数衰减（半衰期数学、增量与一次性重算等价）、**explicit 不衰减**（时间旅行测试）、
+#                 plays/skips 计数、置信度门控（low 不许主动推荐）、排序确定性、事件裁剪
 ```
 
 可选真实网络冒烟（五平台搜索，需外网）：
@@ -396,7 +422,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（160 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（221 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）

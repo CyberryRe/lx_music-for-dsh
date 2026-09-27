@@ -195,8 +195,23 @@ class MiniExpect {
   toBeGreaterThanOrEqual(n: number): void {
     if (!(Number(this.actual) >= n)) fail(`${String(this.actual)} 小于 ${n}`)
   }
+  /** 浮点近似相等：|actual - expected| ≤ 0.5×10^-digits（默认 2 位）。 */
+  toBeCloseTo(expected: number, digits = 2): void {
+    const tolerance = Math.pow(10, -digits) / 2
+    const diff = Math.abs(Number(this.actual) - expected)
+    if (!(diff <= tolerance)) fail(`期望 ≈ ${expected}（${digits} 位），实际 ${String(this.actual)}（差 ${diff}）`)
+  }
+  toBeUndefined(): void {
+    if (this.actual !== undefined) fail(`期望 undefined, 实际 ${String(this.actual)}`)
+  }
+  toBeDefined(): void {
+    if (this.actual === undefined) fail('期望已定义, 实际 undefined')
+  }
   toBeLessThanOrEqual(n: number): void {
     if (!(Number(this.actual) <= n)) fail(`${String(this.actual)} 大于 ${n}`)
+  }
+  toBeLessThan(n: number): void {
+    if (!(Number(this.actual) < n)) fail(`${String(this.actual)} 不小于 ${n}`)
   }
   toBeNull(): void {
     if (this.actual !== null) fail(`期望 null, 实际 ${String(this.actual)}`)
