@@ -192,8 +192,12 @@ export function strictMatch(
   const wantedVariant = request.variant
   let variantScore: number
   if (wantedVariant) {
-    variantScore = variant === wantedVariant ? 2 : 0
-    if (variant !== wantedVariant) reasons.push(`版本不符（要 ${wantedVariant}，实际 ${variant}）`)
+    // 显式指定版本是**硬要求**：要 Live 就不能拿原唱顶替（反之亦然）
+    if (variant !== wantedVariant) {
+      reasons.push(`版本不符（要 ${wantedVariant}，实际 ${variant}）`)
+      return { ok: false, score: 0, variant, reasons }
+    }
+    variantScore = 2
   } else {
     variantScore = VARIANT_PRIORITY[variant]
     reasons.push(`版本：${variant}`)

@@ -326,6 +326,36 @@ export class TasteStore {
     return record?.status === 'played'
   }
 
+  /**
+   * 按平台 + 曲目 id 反查已确认的可播放引用（Tier-1 直取的另一条入口）。
+   *
+   * 为什么需要：`music_play_song({source,id})` 只给了平台 id，没有曲名/艺人，
+   * 无法直接算出 trackKey。曲目表有上限（≤2000），线性扫描代价可忽略。
+   */
+  findByRef(source: string, id: string): { trackKey: string; record: StoredTrack; music: StoredMusicInfo } | undefined {
+    for (const [trackKey, value] of Object.entries(this.load('track'))) {
+      const record = value as StoredTrack
+      const entry = record.refs?.[source]
+      if (entry && entry.music.id === id) return { trackKey, record, music: entry.music }
+    }
+    return undefined
+  }
+
+  /** 忘记单个实体（设置页与 music_taste(forget) 用）。 */
+  async forget(kind: TasteEntityKind, key: string): Promise<boolean> {
+    const table = tableOf(kind)
+    const current = this.load(kind)
+    if (!(key in current)) return false
+    delete current[key]
+    this.cache[table] = current
+    try {
+      await this.storage.table(table).delete(key)
+    } catch (err) {
+      this.onWarn(`[lx-music-for-dsh] 画像遗忘失败: ${table}/${key}`, err)
+    }
+    return true
+  }
+
   /** 已听曲目 key 集合（探索排除用）。 */
   playedKeys(): Set<string> {
     const table = this.load('track')
@@ -462,13 +492,17 @@ export class TasteStore {
     return next
   }
 
-  /** 取排行（工具与 UI 都用它）。 */
-  top(kind: TasteEntityKind, options: { now?: number; halfLifeDays: number; limit?: number; minPurpose?: 'tiebreak' | 'rerank' | 'proactive' }): RankedEntity[] {
+  /** 取排行（工具与 UI 都用它）。`includeNegative` 用于展示"明确不喜欢"的黑名单。 */
+  top(
+    kind: TasteEntityKind,
+    options: { now?: number; halfLifeDays: number; limit?: number; minPurpose?: 'tiebreak' | 'rerank' | 'proactive'; includeNegative?: boolean },
+  ): RankedEntity[] {
     return topEntities(this.load(kind), {
       now: options.now ?? this.now(),
       halfLifeDays: options.halfLifeDays,
       limit: options.limit ?? 10,
       ...(options.minPurpose ? { minPurpose: options.minPurpose } : {}),
+      ...(options.includeNegative ? { includeNegative: true } : {}),
     })
   }
 

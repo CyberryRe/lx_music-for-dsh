@@ -13,6 +13,7 @@ import { memoryConfigSchema, normalizeMemoryConfig } from './taste/config'
 import { storedArtistSchema, storedTagSchema, storedTrackSchema, tasteEventDaySchema, tasteStateSchema } from './taste/schema'
 import { TasteStore } from './taste/store'
 import { TasteRecorder } from './taste/recorder'
+import { registerTasteTools } from './taste/tools'
 import { defaultDomainFile, migrateLegacyDomain } from './storage/migrate'
 
 export const name = 'lx-music-for-dsh'
@@ -178,8 +179,9 @@ export async function apply(ctx: {
   // 音乐画像：store（持久化）+ recorder（捕获）。默认开启，用户可在首启引导里关闭。
   const memory = normalizeMemoryConfig((storage?.global.get() as { memory?: unknown } | undefined)?.memory)
   let recorder: TasteRecorder | undefined
+  let tasteStore: TasteStore | undefined
   if (storage && memory.enabled) {
-    const tasteStore = new TasteStore(storage, {
+    tasteStore = new TasteStore(storage, {
       onWarn: (msg, err) => {
         logger.warn(msg, err)
       },
@@ -217,6 +219,21 @@ export async function apply(ctx: {
 
   // LLM 音乐工具集（细粒度：搜索/播放/播放列表/上下首/控制 + 兼容 search_and_play）
   registerMusicTools(ctx, { service })
+
+  // 画像工具集（music_profile / music_play_song / music_taste）：
+  // 有 storage 就注册（画像被关闭时工具会明确回"已关闭"，而不是让模型以为能力不存在）
+  if (tasteStore) {
+    registerTasteTools(ctx, {
+      service,
+      store: tasteStore,
+      memory,
+      onLog: (entry) => {
+        if (storage) {
+          storage.table('logs').put(entry.time, entry).catch((err) => logger.warn('[lx-music-for-dsh] 日志写入失败:', err))
+        }
+      },
+    })
+  }
 
   // 插件卸载时释放音源子进程（避免孤儿进程）并结算当前画像会话
   const disposeHook = (ctx as { on?: (event: string, fn: () => void) => void }).on

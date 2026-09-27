@@ -66,9 +66,9 @@ describe('host 集成（apply 全流程）', () => {
     // 1. 服务注册
     expect(typeof ctx.lxPlayback?.getState).toBe('function')
 
-    // 2. 工具注册：细粒度工具集（6 个 music_* + 兼容 search_and_play）
-    expect(tools).toHaveLength(7)
-    for (const name of ['music_search', 'music_play', 'music_playlist', 'music_prev', 'music_next', 'music_control', 'search_and_play']) {
+    // 2. 工具注册：细粒度工具集（6 个 music_* + 兼容 search_and_play）+ 画像工具集（3 个）
+    expect(tools).toHaveLength(10)
+    for (const name of ['music_search', 'music_play', 'music_playlist', 'music_prev', 'music_next', 'music_control', 'search_and_play', 'music_profile', 'music_play_song', 'music_taste']) {
       expect(tools.some((t) => t.name === name)).toBe(true)
     }
 
