@@ -46,7 +46,11 @@ export function LxMusicCard(props: CardProps): JSX.Element {
   const cover = current?.meta.picUrl
   // 报错单独占一行（换行 + 两行截断 + title 提示完整内容）：直接塞进歌手里会因为
   // 单行省略号而看不到内容，而它偏偏是最需要被看见的文字。
-  const errorText = !current && snapshot.error ? snapshot.error : null
+  //
+  // host 半边没连上时，最常见的原因是"装了新版本但没彻底重启 DSH"（加载的还是旧代码）。
+  // 这个提示必须写在**客户端**：host 挂了之后 remote 调用全失败，只有客户端能显示东西。
+  const RESTART_HINT = '插件 host 半边未激活。若你刚安装/更新过插件，请**彻底退出并重启 DSH**（关窗口不算）——本版本需要完全重启才会加载新代码，该问题下个大版本修复。'
+  const errorText = !current && snapshot.error ? `${snapshot.error}\n\n${RESTART_HINT}` : null
 
   return (
     <div
@@ -67,18 +71,21 @@ export function LxMusicCard(props: CardProps): JSX.Element {
             {current?.singer ?? (snapshot.connected ? '播放列表为空' : (errorText ? '连接失败' : '连接中…'))}
           </div>
         </div>
-        <button
-          type="button"
-          className="lxm-btn"
-          aria-label="我的口味"
-          title="我的口味（音乐画像）"
-          onClick={(e) => {
-            e.stopPropagation()
-            store.openTaste()
-          }}
-        >
-          ♪
-        </button>
+        {/* ♪ 入口只在实验性画像**已开启**时出现：未开启时不给入口（在设置窗口的「实验性」页开启） */}
+        {snapshot.taste?.enabled ? (
+          <button
+            type="button"
+            className="lxm-btn"
+            aria-label="我的口味"
+            title="我的口味（音乐画像）"
+            onClick={(e) => {
+              e.stopPropagation()
+              store.openTaste()
+            }}
+          >
+            ♪
+          </button>
+        ) : null}
         <button
           type="button"
           className="lxm-btn"

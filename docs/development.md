@@ -77,7 +77,7 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（369 例） |
+| `npm test` | 编译并运行全部单元测试（385 例） |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -120,8 +120,25 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
    行配置会整体消失，所以"缺省即可用"是硬要求。
    锁：`Config({})` 必须通过 + 随包 patch 的 config 必须通过校验（同文件）。
 
-> 教训：`apply()` 里直接传对象给测试是**测不出**这两类的——配置校验发生在 cordis 调用
-> `apply` **之前**。所以要么锁 schema 本身（本轮做法），要么用真实 loader 起一次。
+3. **直接读未声明的服务**。cordis 4 的 context 代理只允许读「`inject` 已声明」或
+   「本 fiber 已 provide」的服务，其它一律抛 `cannot get property "<name>" without inject`。
+   所以 `if (ctx.storageDomain)` 这种写法在存储服务没给到这个 fiber 时**直接炸掉整个插件激活**
+   （1.2.1 在 DSH 0.2.0-rc.2 上的事故）。可选能力**只能**通过作用域注入拿：
+
+   ```ts
+   ctx.inject(['storageDomain'], (scoped) => { const domain = scoped.storageDomain /* ... */ })
+   ```
+
+   这与第 1 条是一体两面：写进 `inject`（必需）会在服务缺席时永不激活，直接读（未声明）会在
+   服务缺席时抛错——**只有作用域注入**既能等到服务、又能在缺席时降级。
+   （实测：DSH 0.2.0-rc.2 的 `@deepseek-ai/*` 运行时包与 0.1.7-rc.2 **字节相同**，变的是应用层
+   加载时序——存储服务不再预放进插件 fiber，所以 1.1.0 那种 `inject: ['storageDomain']` 的
+   写法也会以 `cannot get required service ... in inactive context` 失败。）
+   锁：`tests/activation.test.ts` 用 `new Proxy(ctx, ...)` 让读 `storageDomain`/`skills`
+   直接抛错，断言插件仍能完整激活。
+
+> 教训：`apply()` 里直接传对象给测试是**测不出**前两类的——配置校验发生在 cordis 调用
+> `apply` **之前**；第三类要模拟严格代理才测得出。所以要么锁 schema/代理，要么用真实 loader 起一次。
 
 ### 4.2 client 侧（浏览器）
 
@@ -523,7 +540,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（369 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（385 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）
@@ -541,6 +558,35 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
       含防刷与 action 日志）
 - [ ] 无 lxserver 时内置引擎全功能可用（搜索开箱即用；导入音源脚本后直链解析正常）；
       配置 lxserver 后搜索/直链/音源管理走真实服务
+
+### 9.2 实验性开关（音乐画像）的人工实测清单
+
+画像是**实验性功能、默认关闭**（`DEFAULT_MEMORY_CONFIG.enabled = false`），且"开启"必须留下显式凭证：
+
+- [ ] **升级后不会自动采集**：从 1.2.0/1.2.1（当时默认开启）升级 → 持久层里可能仍有
+      `memory.enabled: true`，但**没有** `memory.experimentalOptInAt` ⇒ 运行时应按关闭处理：
+      卡片上没有 ♪ 入口、播放/切歌**不产生** `taste_*` 记录，`logs/` 目录也不再增长（点歌日志同样门控）。
+      锁：`tests/domain-spec.test.ts`（无凭证 ⇒ false）。
+- [ ] **入口只在总设置里**：设置窗口（⚙）→「实验性」页；未开启时该页是红色警示条 +
+      「了解风险并开启…」；口味窗口在未开启时**打不开**（`openTaste` 直接挡回）。
+- [ ] **开启要二次确认**：确认框里必须点「我已了解，开启实验性功能」；开启后卡片出现 ♪ 入口，
+      且持久层写入 `memory.experimentalOptInAt`（时间戳）。
+- [ ] **关闭是即时的**：设置窗口「实验性」页 →「关闭并停止记录」→ 立刻不再记录（无需重启），
+      ♪ 入口消失、skill `taste-aware-picking` 被撤下（日志里能看到「画像已关闭，撤下 skill」）。
+- [ ] **彻底清除本地数据**：设置 →「实验性」→「清理本机数据」→「彻底清除本地数据…」→ 红色确认
+      → 播放列表清空、画像/证据为空、`logs/` 不再有记录；音源脚本仍在（音源管理页）。
+      实现：`clearList()` + `tasteAction({action:'clear'})`（后者顺带清 `logs` 表与域外遗留文件）。
+- [ ] **卸载会清理本机数据**：卸载插件 → 日志出现「卸载清理：删除 N 项本地数据」，
+      `$DSH_HOME/storages/lx_music/`、`lx_music.json.migrated-*`、`lx-music-sources.json*`、
+      `lx-music-plugin-status.json` 都没了。
+      ⚠️ 清理是**延迟 8 秒 + 可取消**的：期间若插件重新激活（升级/热重载）就取消，
+      避免"每次升级都丢播放列表"。行配置 `cleanupOnUninstall: false` 可关闭。
+- [ ] **重启提示能在三处看到**：① 插件页/市场的描述文案；② 卡片未连接时的错误行；
+      ③ 我们自己抛的激活错误（`ACTIVATION_HINT`）——注意 cordis/DSH 自己抛的错（如
+      `without inject`、配置校验错）发生在 `apply` 之前，**改不了**，只能靠 ①② 兜底。
+- [ ] **关闭时确实什么都不记**：关闭状态下播放几首歌、切几次歌 →
+      `storages/lx_music/logs/` 与 `taste_events/` 的文件数与修改时间都不变。
+      锁：`tests/host.integration.test.ts`（关闭时 `service.log()` 不落盘、开启后才落盘）。
 
 ### 9.1 音乐画像（1.2.0）的人工实测清单
 
@@ -626,6 +672,25 @@ ValidationError: invalid config:
 
 **(3) 侧边栏小卡片被长报错撑破。** `.lxm-card` 缺宽度约束，报错文本（含 URL/JSON、无空格）
 把卡片撑出侧边栏并盖住设置入口；现在卡片可被压缩、报错单独一行换行 + 两行截断 + `title`。
+
+### 10.0.2 1.2.2：DSH 0.2.0-rc.2 兼容 + 画像改为实验性（默认关闭）
+
+**(1) 0.2.0 兼容：不再直接读未声明的服务。** 桌面版自动更新到 0.2.0-rc.2 后插件报
+`启用失败：cannot get property "storageDomain" without inject`。排查结论（用 asar 抽取器
+逐包比对）：`@deepseek-ai/*` 运行时包与 0.1.7-rc.2 **字节相同**，变化在应用层的加载时序——
+存储服务不再预放进插件 fiber，于是「直接读」和「写进必需 inject」两种写法都会失败。
+改法：`apply()` 全程不读 `ctx.storageDomain`/`ctx.skills`，存储与 skill 一律走
+`ctx.inject([...], cb)`；服务就绪即挂载（`attachStorage/attachTaste`），未就绪则先在内存模式下
+完整可用（服务 + 7 个音乐工具），不再出现「插件整个不存在 → `lxPlayback/*` 全 404」。
+锁：`tests/activation.test.ts` 用严格 Proxy 断言「读未声明服务就抛错」时仍能激活。
+
+**(2) 音乐画像改为实验性功能，默认关闭。** `DEFAULT_MEMORY_CONFIG.enabled = false`：
+不采集、不参与点歌、**不注册 skill**（skill 跟着开关走，开启即注册、关闭即撤下）。
+开启路径必须经过红色警示 + 二次确认（`TasteWindow` 的 `.lxm-danger` 警示条 → `.lxm-modal-card`
+确认框 → 唯一一处 `setMemoryConfig({ enabled: true })`），关闭是即时的。
+**(3) 实验性开关的收尾（并入总设置）**：开关从「我的口味」窗口搬到**主设置窗口的「实验性」页**；未开启时**不显示 ♪ 入口**（`openTaste` 也挡回、skill 不注册）；**关闭时不写任何音乐行为记录**（含点歌日志 `logs` 表，实测问题：用户以为关了却还在记切歌）；并引入**显式凭证**`memory.experimentalOptInAt` —— 老版本默认开启时代留下的 `enabled: true` 不再生效，必须重新在红色警示后确认。顺带修掉一个真 bug：运行时切换开关原本不影响日志门控（`onMemoryChange` 没有回写 `apply` 作用域的 `memory`）。
+回归锁：`tests/ui-styles.test.ts`（危险色/可压缩/唯一写入点/我已了解/入口隐藏）、
+`tests/domain-spec.test.ts`（默认关闭）、`tests/taste-skill.test.ts`（门控）。
 
 ### 10.1 1.1.0：双契约（一份产物兼容两代 DSH）+ 桌面版沙箱修复
 

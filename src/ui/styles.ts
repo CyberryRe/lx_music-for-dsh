@@ -2,7 +2,49 @@
 
 export const STYLE_TAG = 'lx-music-for-dsh/styles'
 
-export const CSS = `
+export const CSS = `/* ── 实验性功能警示（音乐画像默认关闭，开启需二次确认）─────────────────────
+   用户可见的"红线"：警示条与确认弹窗都必须一眼看出是危险/实验性操作。 */
+.lxm-danger {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px; margin-bottom: 8px;
+  border: 1px solid var(--dsw-alias-state-error-primary, #f56c6c);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #f56c6c) 12%, transparent);
+  min-width: 0; max-width: 100%;
+}
+.lxm-danger-title {
+  font-size: 13px; font-weight: 700;
+  color: var(--dsw-alias-state-error-primary, #f56c6c);
+  min-width: 0; max-width: 100%; overflow-wrap: anywhere;
+}
+.lxm-danger-body {
+  font-size: 12px; line-height: 1.6;
+  color: var(--dsw-alias-label-primary, #e6e6e6);
+  display: flex; flex-direction: column; gap: 4px;
+  min-width: 0; max-width: 100%; overflow-wrap: anywhere;
+}
+.lxm-danger-btn {
+  border-color: var(--dsw-alias-state-error-primary, #f56c6c) !important;
+  color: var(--dsw-alias-state-error-primary, #f56c6c) !important;
+  align-self: flex-start;
+}
+.lxm-modal-backdrop {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.lxm-modal-card {
+  display: flex; flex-direction: column; gap: 8px;
+  width: auto; max-width: 100%; max-height: 100%;
+  overflow-y: auto;
+  padding: 14px 16px;
+  border: 2px solid var(--dsw-alias-state-error-primary, #f56c6c);
+  border-radius: 10px;
+  background: var(--dsw-specific-sidebar-fill, #1e1e1e);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  color: var(--dsw-alias-label-primary, #e6e6e6);
+}
 .lxm-card {
   display: flex;
   flex-direction: column;

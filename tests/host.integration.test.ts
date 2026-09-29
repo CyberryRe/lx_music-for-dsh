@@ -12,6 +12,22 @@ interface ToolLike {
   description: string
 }
 
+/**
+ * 提供 storageDomain 服务。
+ *
+ * cordis 4 起，"给 ctx 直接赋属性"不再算注册服务：插件的 `ctx.inject(['storageDomain'], cb)`
+ * 看不到它（而插件也**不能**直接读 `ctx.storageDomain`，那样会抛 without inject）。
+ * 所以测试必须走 `ctx.provide()` —— 与 dsh-storage-domain 内部的做法一致。
+ */
+function provideStorageDomain(ctx: Record<string, unknown>, domain: unknown): void {
+  ;(ctx as unknown as { provide(name: string, value: unknown): void }).provide('storageDomain', domain)
+}
+
+/** 等存储挂载完成：apply 只同步注册服务与音乐工具，存储与画像是就绪后异步 attach 的。 */
+async function waitForTools(tools: ToolLike[], expected: number): Promise<void> {
+  for (let i = 0; i < 200 && tools.length < expected; i++) await new Promise((r) => setTimeout(r, 10))
+}
+
 function fakeStorageDomain() {
   const globalStore = new Map<string, unknown>()
   const tables = new Map<string, Map<string, unknown>>()
@@ -37,6 +53,7 @@ function fakeStorageDomain() {
   }
   return {
     open: async () => domain,
+    tables,
   }
 }
 
@@ -58,10 +75,11 @@ describe('host 集成（apply 全流程）', () => {
     }
     const tools: ToolLike[] = []
     ctx.tools = { register: (t) => tools.push(t as ToolLike) }
-    ctx.storageDomain = fakeStorageDomain()
+    provideStorageDomain(ctx as unknown as Record<string, unknown>, fakeStorageDomain())
     ctx.logger = console
 
     await apply(ctx, { providerMode: 'mock', rateLimitPerMinute: 3, migrateLegacyDomain: false })
+    await waitForTools(tools, 10)
 
     // 1. 服务注册
     expect(typeof ctx.lxPlayback?.getState).toBe('function')
@@ -90,6 +108,36 @@ describe('host 集成（apply 全流程）', () => {
     expect(Array.isArray(sources)).toBe(true)
   })
 
+  it('实验性开关关闭时不写任何播放行为日志；开启后才写', async () => {
+    const ctx = new Context() as never as Record<string, unknown> & {
+      tools: { register(t: unknown): void }
+      logger: { warn(...a: unknown[]): void }
+      lxPlayback: {
+        log(entry: Record<string, unknown>): void
+        setMemoryConfig(req: { patch: Record<string, unknown> }): Promise<unknown>
+      }
+    }
+    const tools: ToolLike[] = []
+    ctx.tools = { register: (t) => tools.push(t as ToolLike) }
+    ctx.logger = console
+    const domain = fakeStorageDomain()
+    provideStorageDomain(ctx as unknown as Record<string, unknown>, domain)
+
+    await apply(ctx, { providerMode: 'mock', migrateLegacyDomain: false })
+    await waitForTools(tools, 10)
+
+    const entry = { time: new Date().toISOString(), action: 'play', query: '晴天', limit: 3, autoPlay: true, source: null, resultsCount: 1, playedId: null, latencyMs: 5 }
+    // 默认关闭：一条都不记（点歌日志也算音乐行为记录）
+    ctx.lxPlayback.log(entry)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(domain.tables.get('logs')?.size ?? 0).toBe(0)
+
+    // 显式开启后才写
+    await ctx.lxPlayback.setMemoryConfig({ patch: { enabled: true } })
+    ctx.lxPlayback.log({ ...entry, time: new Date().toISOString() })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(domain.tables.get('logs')?.size ?? 0).toBe(1)
+  })
   it('工具执行：music_play 搜索+直链+播放，且限流生效', async () => {
     const ctx = new Context() as never as Record<string, unknown> & {
       tools: { register(t: unknown): void }
@@ -103,9 +151,10 @@ describe('host 集成（apply 全流程）', () => {
     }
     const tools: ToolLike[] = []
     ctx.tools = { register: (t) => tools.push(t as ToolLike) }
-    ctx.storageDomain = fakeStorageDomain()
+    provideStorageDomain(ctx as unknown as Record<string, unknown>, fakeStorageDomain())
     ctx.logger = console
     await apply(ctx, { providerMode: 'mock', rateLimitPerMinute: 2, migrateLegacyDomain: false })
+    await waitForTools(tools, 10)
 
     const findTool = (name: string): ToolLike => {
       const tool = tools.find((t) => t.name === name)

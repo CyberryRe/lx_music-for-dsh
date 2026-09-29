@@ -58,6 +58,8 @@ function makeFacade(overrides: { enabled?: boolean; onboarded?: boolean; snoozed
     storage,
     memory: {
       ...DEFAULT_MEMORY_CONFIG,
+      // 这些用例测的是"已开启"的行为；默认关闭由 domain-spec 的断言负责
+      enabled: true,
       ...(overrides.enabled !== undefined ? { enabled: overrides.enabled } : {}),
       ...(overrides.onboarded ? { onboardedAt: new Date(T0).toISOString() } : {}),
       ...(overrides.snoozed ? { snoozedUntil: new Date(T0 + 86_400_000).toISOString() } : {}),
@@ -67,6 +69,24 @@ function makeFacade(overrides: { enabled?: boolean; onboarded?: boolean; snoozed
   })
   return { facade, store, storage, recorder, changes }
 }
+
+describe('TasteFacade：实验性开关的凭证语义', () => {
+  it('开启必须留下 experimentalOptInAt（否则下次启动会被判为未确认而自动关闭）', async () => {
+    const { facade, storage } = makeFacade({ enabled: false })
+    await facade.updateConfig({ enabled: true })
+    const saved = (storage.global.get() as { memory?: { enabled?: boolean; experimentalOptInAt?: string } }).memory
+    expect(saved?.enabled).toBe(true)
+    expect(typeof saved?.experimentalOptInAt).toBe('string')
+    // 视角里也要带上凭证（UI 用它区分「从未确认」与「确认后关闭」）
+    expect(typeof facade.currentConfig().experimentalOptInAt).toBe('string')
+  })
+
+  it('关闭是即时的，且不依赖凭证', async () => {
+    const { facade } = makeFacade({ enabled: true })
+    const next = await facade.updateConfig({ enabled: false })
+    expect(next.enabled).toBe(false)
+  })
+})
 
 describe('TasteFacade：画像视图', () => {
   it('空画像给出引导文案，并报告引导/静默状态', () => {

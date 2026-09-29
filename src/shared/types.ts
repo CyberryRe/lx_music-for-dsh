@@ -350,6 +350,10 @@ export function secondsToInterval(total: number): string {
 /** 画像配置在 UI 上的形状（与 host 侧 MemoryConfig 结构一致）。 */
 export interface MemoryConfigView {
   enabled: boolean
+  /** 实验性功能标记：UI 据此显示红色警示（当前恒为 true，打磨完成后移除）。 */
+  experimental?: boolean
+  /** 显式开启凭证（ISO）；缺失表示用户从未确认过，enabled 必为 false。 */
+  experimentalOptInAt?: string
   onboardedAt?: string
   snoozedUntil?: string
   halfLifeDays: number

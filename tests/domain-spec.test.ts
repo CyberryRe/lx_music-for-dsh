@@ -62,9 +62,20 @@ describe('画像配置（global.memory）', () => {
     expect(memoryConfigSchema.safeParse({}).success).toBe(true)
   })
 
-  it('normalizeMemoryConfig 为空值提供默认：默认开启、纯本地语义层、90 天半衰期', () => {
+  it('normalizeMemoryConfig 为空值提供默认：**默认关闭**（实验性）、纯本地语义层、90 天半衰期', () => {
     const cfg = normalizeMemoryConfig(undefined)
-    expect(cfg.enabled).toBe(true)
+    // 实验性功能：默认必须是关闭的（开启需要 UI 里的红色警示 + 二次确认）
+    expect(cfg.enabled).toBe(false)
+
+    // ⚠️ 升级兼容：老版本（默认开启时代）写下的 `enabled: true` 没有凭证 → 必须按关闭处理，
+    // 否则用户升级后仍在被记录（1.2.2 实测问题："我看现在仍然会有切歌之类的记录"）。
+    expect(normalizeMemoryConfig({ enabled: true, halfLifeDays: 30 }).enabled).toBe(false)
+    // 有凭证（用户在红色警示后确认过）才真正开启，并保留凭证供 UI 判断
+    const opted = normalizeMemoryConfig({ enabled: true, experimentalOptInAt: '2026-09-29T00:00:00.000Z' })
+    expect(opted.enabled).toBe(true)
+    expect(opted.experimentalOptInAt).toBe('2026-09-29T00:00:00.000Z')
+    // 凭证在但开关关着 → 关闭（用户后来关掉了）
+    expect(normalizeMemoryConfig({ enabled: false, experimentalOptInAt: '2026-09-29T00:00:00.000Z' }).enabled).toBe(false)
     expect(cfg.halfLifeDays).toBe(90)
     expect(cfg.retainDays).toBe(90)
     expect(cfg.budget).toBe('balanced')

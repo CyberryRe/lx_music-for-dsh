@@ -253,18 +253,12 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
       {tab === 'settings' ? (
         <div className="lxm-panel">
           <div className="lxm-settings-grid">
-            <div className="lxm-switch-row">
-              <div>
-                <div className="lxm-field-label">记录我的音乐口味</div>
-                <div className="lxm-field-hint">关闭后立刻停止记录（不需要重启），已有数据仍然保留。</div>
+            {/* 开关已并入主设置窗口的「实验性」页（未开启时本窗口根本打不开） */}
+            <div className="lxm-field">
+              <div className="lxm-field-label">当前状态</div>
+              <div className="lxm-field-hint">
+                实验性功能已开启。要关闭请到「设置 → 实验性」；关闭后立刻停止记录，已有数据保留。
               </div>
-              <button
-                type="button"
-                className="lxm-switch"
-                data-on={config?.enabled ?? false}
-                disabled={busy}
-                onClick={() => void store.setMemoryConfig({ enabled: !(config?.enabled ?? false) })}
-              />
             </div>
 
             <div className="lxm-field">
@@ -367,6 +361,7 @@ export function LxTasteWindow(props: TasteWindowProps): JSX.Element {
           {snapshot.tasteNotice ? <div className="lxm-field-hint">{snapshot.tasteNotice}</div> : null}
         </div>
       ) : null}
+
     </Window>
   )
 }

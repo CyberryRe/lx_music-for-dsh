@@ -31,11 +31,21 @@ export const memoryConfigSchema = z.object({
   exploreRatio: z.number().optional(),
   /** 一次性迁移标记（如 `single@2026-01-01T00:00:00.000Z`）；存在即表示已迁移。 */
   migratedFrom: z.string().optional(),
+  /**
+   * **显式开启凭证**（ISO 时间）：用户在设置里看到红色警示、点过确认按钮才会写入。
+   *
+   * 没有它时 `enabled` 一律按 false 处理 —— 这样老版本（1.2.0/1.2.1 默认开启时代）写下的
+   * `enabled: true` 不会在升级后继续偷偷采集。实测问题：用户升级到 1.2.2 后仍在记录切歌，
+   * 就是因为持久层里存着旧的 `enabled: true`。
+   */
+  experimentalOptInAt: z.string().optional(),
 })
 
 /** 读侧归一化后的画像配置（所有字段都有确定值）。 */
 export interface MemoryConfig {
   enabled: boolean
+  /** 显式开启凭证；缺失时 enabled 恒为 false（见 memoryConfigSchema.experimentalOptInAt）。 */
+  experimentalOptInAt?: string
   onboardedAt?: string
   snoozedUntil?: string
   halfLifeDays: number
@@ -47,9 +57,16 @@ export interface MemoryConfig {
   migratedFrom?: string
 }
 
-/** 默认值：默认开启画像（用户可在首启引导里关闭），纯本地语义层。 */
+/**
+ * 默认配置。
+ *
+ * ⚠️ `enabled` 默认 **false**：音乐画像是**实验性功能**，默认完全不采集、不参与点歌。
+ * 用户必须在**设置窗口的「实验性」页**看到红色警示并显式确认后才会开启
+ * （见 SettingsWindow.tsx 的双重确认与 docs/development.md §9.2）。
+ * 理由：它记录收听行为并影响 AI 的选歌决策，在打磨完成前不应该悄悄生效。
+ */
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
-  enabled: true,
+  enabled: false,
   halfLifeDays: 90,
   retainDays: 90,
   budget: 'balanced',
@@ -67,8 +84,12 @@ export function normalizeMemoryConfig(raw: unknown): MemoryConfig {
   const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   const budget = value.budget
   const semantic = value.semanticProfile
+  const optIn = typeof value.experimentalOptInAt === 'string' && value.experimentalOptInAt.length > 0 ? value.experimentalOptInAt : undefined
   return {
-    enabled: typeof value.enabled === 'boolean' ? value.enabled : DEFAULT_MEMORY_CONFIG.enabled,
+    // ⚠️ 只有**显式确认过**才可能开启：老的 `enabled: true`（1.2.0/1.2.1 默认开启时代写下的）
+    // 不算凭证，升级后自动按关闭处理；用户重新确认才会真正采集。
+    enabled: optIn !== undefined && value.enabled === true,
+    ...(optIn !== undefined ? { experimentalOptInAt: optIn } : {}),
     ...(typeof value.onboardedAt === 'string' ? { onboardedAt: value.onboardedAt } : {}),
     ...(typeof value.snoozedUntil === 'string' ? { snoozedUntil: value.snoozedUntil } : {}),
     halfLifeDays: num(value.halfLifeDays, DEFAULT_MEMORY_CONFIG.halfLifeDays, 1, 3650),

@@ -16,7 +16,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 /** 插件版本：必须与 package.json 一致（tests/activation.test.ts 锁住）。 */
-export const PLUGIN_VERSION = '1.2.1'
+export const PLUGIN_VERSION = '1.2.2'
 
 /** 状态文件里的一次激活记录（同一进程内多次调用会保留历史，便于观察重试/热重载）。 */
 export interface PluginStatusRecord {

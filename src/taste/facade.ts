@@ -6,6 +6,7 @@
 //     全部是可 headless 测试的纯逻辑，UI 只做渲染。
 
 import type { StorageFace } from '../playback'
+import { cleanupLocalData } from '../storage/cleanup'
 import type {
   MemoryConfigView,
   MusicInfo,
@@ -53,6 +54,7 @@ function toConfigView(memory: MemoryConfig): MemoryConfigView {
     ...(memory.onboardedAt ? { onboardedAt: memory.onboardedAt } : {}),
     ...(memory.snoozedUntil ? { snoozedUntil: memory.snoozedUntil } : {}),
     ...(memory.migratedFrom ? { migratedFrom: memory.migratedFrom } : {}),
+    ...(memory.experimentalOptInAt ? { experimentalOptInAt: memory.experimentalOptInAt } : {}),
   }
 }
 
@@ -193,8 +195,32 @@ export class TasteFacade {
     const action = req.action
     if (action === 'clear') {
       await this.store.clear()
+      // 点歌/播放日志与画像同属「用户在本机留下的音乐数据」：一并清掉
+      //（否则点了"清空"之后 logs/ 里还留着切歌记录）。
+      let logsCleared = 0
+      try {
+        const logs = this.storage?.table('logs')
+        if (logs) {
+          for (const [key] of [...logs.entries()]) {
+            await logs.delete(key)
+            logsCleared += 1
+          }
+        }
+      } catch (err) {
+        this.onWarn('[lx-music-for-dsh] 清空点歌日志失败（画像已清空）', err)
+      }
+      // 域外遗留（旧版整份文件、音源兜底文件、插件状态文件）也一并删除；
+      // domain 目录正被打开，交给卸载清理处理，这里不动。
+      let leftovers = 0
+      try {
+        leftovers = cleanupLocalData({ includeDomain: false }).removed.length
+      } catch (err) {
+        this.onWarn('[lx-music-for-dsh] 清理遗留文件失败', err)
+      }
       await this.store.appendEvent({ kind: 'forget', origin: 'user', mode: 'replay', ts, deltas: [] })
-      return { ok: true, message: '已清空全部画像数据。' }
+      const parts = ['画像', `点歌日志 ${logsCleared} 条`]
+      if (leftovers > 0) parts.push(`遗留文件 ${leftovers} 个`)
+      return { ok: true, message: `已清空本地音乐数据（${parts.join(' + ')}）。` }
     }
     if (!this.memory.enabled && action !== 'onboard' && action !== 'snooze') {
       return { ok: false, message: '音乐画像已关闭，请先在设置里开启。' }
@@ -249,7 +275,13 @@ export class TasteFacade {
 
   /** 改配置（合并后归一化并落盘到 global.memory）。 */
   async updateConfig(patch: Record<string, unknown>): Promise<MemoryConfig> {
-    const merged = normalizeMemoryConfig({ ...this.memory, ...patch })
+    // 显式开启必须留凭证（experimentalOptInAt）：normalizeMemoryConfig 只认这个标记，
+    // 没有它时 enabled 会被强制按 false 处理（这样老版本默认开启时代写下的 true 不会继续生效）。
+    const request =
+      patch.enabled === true && typeof patch.experimentalOptInAt !== 'string'
+        ? { ...patch, experimentalOptInAt: new Date(this.now()).toISOString() }
+        : patch
+    const merged = normalizeMemoryConfig({ ...this.memory, ...request })
     this.memory = merged
     this.onMemoryChange?.(merged)
     const storage = this.storage

@@ -57,7 +57,7 @@ const MUSIC: MusicInfo = {
 function makeHarness(options: { memory?: Partial<MemoryConfig> } = {}) {
   const storage = fakeStorage()
   const store = new TasteStore(storage)
-  const memory: MemoryConfig = { ...DEFAULT_MEMORY_CONFIG, ...options.memory }
+  const memory: MemoryConfig = { ...DEFAULT_MEMORY_CONFIG, enabled: true, ...options.memory }
   const service = new PlaybackService(new Context(), {
     settings: { ...DEFAULT_SETTINGS, providerMode: 'mock' },
     rateLimiter: new SlidingWindowRateLimiter({ maxCalls: 50, windowMs: 60_000 }),

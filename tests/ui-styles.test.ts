@@ -100,6 +100,47 @@ describe('小卡片的报错渲染', () => {
   })
 })
 
+describe('实验性功能的红色警示（画像默认关闭）', () => {
+  it('警示条与确认弹窗用危险色，并且可被压缩（长文案不撑破窗口）', () => {
+    for (const selector of ['.lxm-danger', '.lxm-danger-title', '.lxm-modal-card']) {
+      const body = ruleBody(CSS, selector)
+      expect(body).toBeDefined()
+      const text = body ?? ''
+      expect(/state-error-primary/.test(text)).toBe(true)
+      expect(/max-width:\s*100%/.test(text)).toBe(true)
+    }
+    // 弹窗是覆盖层：必须有背景遮罩，视觉上真的"弹出"
+    expect(CSS).toContain('.lxm-modal-backdrop')
+    expect(/position:\s*absolute/.test(ruleBody(CSS, '.lxm-modal-backdrop') ?? '')).toBe(true)
+  })
+
+  it('实验性开关在主设置窗口，且开启必须二次确认（全仓库唯一写 enabled:true 的地方）', () => {
+    const settings = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'SettingsWindow.tsx'), 'utf8')
+    // 开关并入总设置：新增「实验性」标签页
+    expect(settings).toContain("'experimental'")
+    expect(settings).toContain('实验性')
+    expect(settings).toContain('confirmEnable')
+    // 确认框里必须有明确的「我已了解」字样（用户确实看到了风险说明）
+    expect(settings).toContain('我已了解')
+    // 唯一写入点：确认按钮的回调
+    const enables = settings.split('\n').filter((line) => /setMemoryConfig\(\{\s*enabled:\s*true/.test(line))
+    expect(enables).toHaveLength(1)
+
+    // 口味窗口里不再有开关（它只在已开启时可达）
+    const taste = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'TasteWindow.tsx'), 'utf8')
+    expect(taste).not.toContain('setMemoryConfig({ enabled: true }')
+  })
+
+  it('未开启时不暴露口味入口：卡片 ♪ 按开关渲染，openTaste 直接挡回', () => {
+    const card = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'Card.tsx'), 'utf8')
+    expect(card).toContain('snapshot.taste?.enabled ?')
+    expect(card).toContain('我的口味')
+    const store = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'store.ts'), 'utf8')
+    // openTaste 首行必须门控（含自动引导路径）
+    expect(store).toContain("if (this.snapshot.taste?.enabled !== true) return")
+  })
+})
+
 describe('「我的口味」窗口的按钮用法', () => {
   /** 读取源码（测试跑在 .test-dist/tests 下，源码仍在仓库里）。 */
   const source = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'TasteWindow.tsx'), 'utf8')

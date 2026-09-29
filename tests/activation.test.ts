@@ -135,6 +135,34 @@ describe('激活路径：可选依赖不能写进 inject', () => {
     }
   })
 
+  it('绝不直接读未声明的服务：严格代理（读 storageDomain/skills 就抛错）下仍能激活', async () => {
+    // cordis 4 的 context 代理只允许读「inject 已声明」或「本 fiber 已 provide」的服务，
+    // 否则抛 `cannot get property "X" without inject` —— 这正是 1.2.1 在 DSH 0.2.0-rc.2 上
+    // 「启用失败」的原因（服务其实挂着，只是没给这个 fiber / 还没就绪）。
+    // 1.1.0 是同一类问题的另一面：它把 storageDomain 写进 inject（必需依赖），
+    // 服务未就绪时读它会抛 `cannot get required service ... in inactive context`。
+    await withTempHome(async () => {
+      const tools: ToolLike[] = []
+      const base = new Context() as unknown as Record<string, unknown>
+      base.tools = { register: (t: unknown) => tools.push(t as ToolLike) }
+      const strict = new Proxy(base, {
+        get(target, prop, receiver) {
+          if (prop === 'storageDomain' || prop === 'skills') {
+            throw new Error(`cannot get property "${String(prop)}" without inject`)
+          }
+          return Reflect.get(target, prop, receiver)
+        },
+      }) as unknown as Record<string, unknown>
+
+      await apply(strict as never, { providerMode: 'mock', migrateLegacyDomain: false })
+      // 仍然完整激活：服务 + 音乐工具（内存模式；存储就绪后再挂画像）
+      expect(base.lxPlayback).toBeDefined()
+      expect(tools.map((t) => t.name).sort()).toEqual(
+        ['music_control', 'music_next', 'music_play', 'music_playlist', 'music_prev', 'music_search', 'search_and_play'],
+      )
+    })
+  })
+
   it('没有 storageDomain 时插件照样激活：服务与音乐工具都在（内存模式）', async () => {
     await withTempHome(async (home) => {
       const tools: ToolLike[] = []
@@ -157,8 +185,13 @@ describe('激活路径：可选依赖不能写进 inject', () => {
       expect(phases).toContain('ready')
       const ready = (status?.history ?? []).find((r) => r.phase === 'ready')
       expect(ready?.storage).toBe('memory')
+      // ⚠️ 不能断言 services.storageDomain：cordis 4 禁止读未声明的服务（读了就抛错），
+      // 状态文件里只记录「有没有 inject 钩子」——这正是 0.2.0 事故后固化的约定。
       const enter = (status?.history ?? []).find((r) => r.phase === 'enter')
-      expect((enter?.services as Record<string, boolean>)?.storageDomain).toBe(false)
+      expect((enter?.services as Record<string, boolean>)?.inject).toBe(true)
+
+      // 且内存模式下不该出现 storage-ready: durable
+      expect((status?.history ?? []).some((r) => r.storage === 'durable')).toBe(false)
     })
   })
 
@@ -193,7 +226,7 @@ describe('激活路径：可选依赖不能写进 inject', () => {
       const status = readStatus(home)
       const ready = (status?.history ?? []).filter((r) => r.phase === 'ready')
       expect(ready.some((r) => r.storage === 'durable')).toBe(true)
-      expect(ready.some((r) => String(r.domain ?? '').includes('迟到挂载'))).toBe(true)
+      expect(ready.some((r) => String(r.domain ?? '').includes('已挂载存储与画像'))).toBe(true)
     })
   })
 })

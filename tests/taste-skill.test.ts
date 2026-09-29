@@ -66,14 +66,60 @@ describe('apply 的 skill 注册路径', () => {
     return { ctx, tools, skills, warnings }
   }
 
-  it('skills 服务可用时注册（走真实的作用域注入）', async () => {
+  it('画像默认关闭 → 不注册 skill（实验性功能不主动暴露给模型）', async () => {
     const { ctx, skills, tools } = makeCtx()
     await apply(ctx, { providerMode: 'mock', migrateLegacyDomain: false })
     // 注入是异步作用域回调，给它一个宏任务落地
     await new Promise((r) => setImmediate(r))
+    expect(skills.registered).toHaveLength(0)
+    expect(tools.length).toBeGreaterThan(0)
+  })
+
+  it('skill 跟着画像开关走：开启即注册、关闭即撤下（无需重启）', async () => {
+    const base = new Context()
+    class FakeSkills extends Service {
+      registered: unknown[] = []
+      constructor(ctx: Context) {
+        super(ctx, 'skills')
+      }
+      register(skill: unknown): () => void {
+        this.registered.push(skill)
+        return () => {
+          this.registered = this.registered.filter((s) => s !== skill)
+        }
+      }
+    }
+    const skills = new FakeSkills(base)
+    // 画像配置存在存储的 global 里，所以要先给一个可用的 storageDomain
+    const globalStore = new Map<string, unknown>()
+    const tables = new Map<string, Map<string, unknown>>()
+    ;(base as unknown as { provide(name: string, value: unknown): void }).provide('storageDomain', {
+      open: async () => ({
+        global: { get: () => globalStore.get('state'), set: async (v: unknown) => void globalStore.set('state', v) },
+        table: (name: string) => {
+          if (!tables.has(name)) tables.set(name, new Map())
+          const t = tables.get(name)!
+          return { get: (k: string) => t.get(k), put: async (k: string, v: unknown) => void t.set(k, v), entries: () => t.entries(), delete: async (k: string) => t.delete(k) }
+        },
+      }),
+    })
+    const tools: unknown[] = []
+    const ctx = base as unknown as Parameters<typeof apply>[0] & { tools: { register(t: unknown): void }; logger: { warn(): void } }
+    ctx.tools = { register: (t) => void tools.push(t) }
+    ctx.logger = { warn: (): void => {} }
+
+    await apply(ctx, { providerMode: 'mock', migrateLegacyDomain: false })
+    // 等存储挂载 + 两个作用域注入落地
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 5))
+    expect(skills.registered).toHaveLength(0) // 默认关闭
+
+    const service = (base as unknown as { lxPlayback: { setMemoryConfig(req: { patch: { enabled?: boolean } }): Promise<unknown> } }).lxPlayback
+    await service.setMemoryConfig({ patch: { enabled: true } })
     expect(skills.registered).toHaveLength(1)
     expect((skills.registered[0] as { name: string }).name).toBe(TASTE_SKILL_NAME)
-    expect(tools.length).toBeGreaterThan(0)
+
+    await service.setMemoryConfig({ patch: { enabled: false } })
+    expect(skills.registered).toHaveLength(0)
   })
 
   it('没有 skills 服务时 apply 仍然正常完成（不因注入缺失而失败）', async () => {

@@ -34,3 +34,6 @@
         rateLimitPerMinute: 6
         # 旧版 single 布局存储 → per-record 的一次性迁移（默认 true；仅测试/嵌入方需要关掉）
         migrateLegacyDomain: true
+        # 卸载插件时清理本机留下的数据（播放列表 / 画像 / 点歌日志 / 音源）。
+        # 延迟 + 可取消：DSH 升级插件同样是「卸载旧包 → 装新包」，不会误删。默认 true。
+        cleanupOnUninstall: true

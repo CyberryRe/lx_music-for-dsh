@@ -536,6 +536,9 @@ export class LxStore {
   // ── 「我的口味」（含首启引导） ───────────────────────────────────────────
 
   openTaste(options: { onboarding?: boolean } = {}): void {
+    // 未开启实验性画像时不给入口：连内部调用（含自动引导）也一并挡掉，
+    // 避免出现"关着却有窗口"的矛盾状态。开启入口只在设置窗口的「实验性」页。
+    if (this.snapshot.taste?.enabled !== true) return
     this.patch({ tasteOpen: true, tasteOnboarding: options.onboarding ?? false, tasteNotice: null })
     void this.refreshTaste()
     void this.refreshTasteEvents()

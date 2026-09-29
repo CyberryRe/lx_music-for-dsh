@@ -22,7 +22,7 @@ export interface SettingsWindowProps {
   Window: (props: DraggableWindowProps) => JSX.Element
 }
 
-type Tab = 'sources' | 'quality' | 'auto'
+type Tab = 'sources' | 'quality' | 'auto' | 'experimental'
 
 export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
   const { store, Window } = props
@@ -40,6 +40,20 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
   const [validating, setValidating] = useState(false)
   const [validMsg, setValidMsg] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
+  // 实验性功能（音乐口味记忆）：开启必须经过红色警示 + 二次确认；未开启时不暴露任何入口
+  const [confirmEnable, setConfirmEnable] = useState(false)
+  // 彻底清除本地数据（播放列表 + 画像 + 点歌日志）的二次确认
+  const [confirmWipe, setConfirmWipe] = useState(false)
+
+  /** 当前形态：null=存储未就绪，false=未开启，true=已开启。 */
+  const memoryEnabled = snapshot.taste?.enabled === true
+
+  const enableMemory = (): void => {
+    setConfirmEnable(false)
+    void store.setMemoryConfig({ enabled: true }).then(() => {
+      store.openTaste({ onboarding: true })
+    })
+  }
 
   const readFile = (file: File): void => {
     const reader = new FileReader()
@@ -133,7 +147,91 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
         <button type="button" className="lxm-tab" data-active={tab === 'sources'} onClick={() => setTab('sources')}>音源管理</button>
         <button type="button" className="lxm-tab" data-active={tab === 'quality'} onClick={() => setTab('quality')}>音质策略</button>
         <button type="button" className="lxm-tab" data-active={tab === 'auto'} onClick={() => setTab('auto')}>自动拉取</button>
+        <button type="button" className="lxm-tab" data-active={tab === 'experimental'} onClick={() => setTab('experimental')}>
+          实验性{memoryEnabled ? '' : '（关闭）'}
+        </button>
       </div>
+
+      {tab === 'experimental' && (
+        <div className="lxm-panel">
+          {memoryEnabled ? (
+            <>
+              <div className="lxm-section-title">音乐口味记忆（实验性 · 已开启）</div>
+              <div className="lxm-field-hint">
+                正在本机记录收听行为，并用于 AI 主动点歌时的候选排序。数据只存在本机、不上传；
+                可在 ♪ 窗口里查看「证据」、逐条删除或一键清空。
+              </div>
+              <div className="lxm-toolbar">
+                <button type="button" className="lxm-btn lxm-btn-text" onClick={() => store.openTaste()}>
+                  打开我的口味
+                </button>
+                <button type="button" className="lxm-btn lxm-btn-text" onClick={() => void store.setMemoryConfig({ enabled: false })}>
+                  关闭并停止记录
+                </button>
+              </div>
+              <div className="lxm-field-hint">关闭会立刻停止记录（无需重启），已有数据仍然保留。</div>
+            </>
+          ) : (
+            <>
+              <div className="lxm-danger" role="alert">
+                <div className="lxm-danger-title">⚠️ 实验性功能：音乐口味记忆（当前关闭）</div>
+                <div className="lxm-danger-body">
+                  <div>· 它会<b>在本机记录</b>你的收听行为：听完了、听到一半切走、主动点歌、跳过等等。</div>
+                  <div>· 记录会聚合成「口味画像」，<b>并交给 AI 用于主动点歌</b>（可能改变给你推荐的歌）。</div>
+                  <div>· 数据<b>只存在本机</b>、不上传；可随时查看、逐条删除或一键清空。</div>
+                  <div>· 这项能力仍在打磨中：<b>行为与数据格式都可能变化</b>。</div>
+                  <div>· <b>关闭状态下不记录任何音乐行为</b>，连点歌日志也不写。</div>
+                </div>
+                <button type="button" className="lxm-btn lxm-btn-text lxm-danger-btn" onClick={() => setConfirmEnable(true)}>
+                  了解风险并开启…
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* 数据清理：画像 + 播放列表 + 点歌日志（+ 旧版遗留文件）。卸载时也会自动清理。 */}
+          <div className="lxm-section-title">清理本机数据</div>
+          <div className="lxm-field-hint">
+            插件在本机留下的东西：音乐画像、点歌日志、播放列表与设置、音源脚本。
+            <b>卸载插件时会自动清理</b>（可在行配置里用 <code>cleanupOnUninstall: false</code> 关闭）。
+          </div>
+          {confirmWipe ? (
+            <div className="lxm-danger" role="alert">
+              <div className="lxm-danger-title">⚠️ 确定清除本机全部音乐数据？</div>
+              <div className="lxm-danger-body">
+                <div>· 将清空：<b>播放列表</b>、音乐画像（含证据）、点歌日志，以及旧版遗留文件。</div>
+                <div>· 音源脚本<b>不删</b>（在「音源管理」页单独管理）。</div>
+                <div>· 此操作不可撤销。</div>
+              </div>
+              <div className="lxm-toolbar">
+                <button
+                  type="button"
+                  className="lxm-search-btn lxm-danger-btn"
+                  onClick={() => {
+                    void (async () => {
+                      await store.clearList()
+                      await store.tasteAction({ action: 'clear' })
+                      setConfirmWipe(false)
+                    })()
+                  }}
+                >
+                  确认清除
+                </button>
+                <button type="button" className="lxm-btn lxm-btn-text" onClick={() => setConfirmWipe(false)}>
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="lxm-toolbar">
+              <button type="button" className="lxm-btn lxm-btn-text lxm-danger-btn" onClick={() => setConfirmWipe(true)}>
+                彻底清除本地数据…
+              </button>
+              <span className="lxm-field-hint">播放列表 + 画像 + 点歌日志。</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {tab === 'sources' && (
         <div className="lxm-panel">
@@ -309,6 +407,30 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
           </div>
         </div>
       )}
+
+      {/* ⚠️ 实验性功能开启前的红色警示 + 二次确认：全仓库唯一写入 enabled: true 的地方 */}
+      {confirmEnable ? (
+        <div className="lxm-modal-backdrop" role="dialog" aria-modal="true" aria-label="开启实验性功能确认">
+          <div className="lxm-modal-card">
+            <div className="lxm-danger-title">⚠️ 开启实验性功能：音乐口味记忆</div>
+            <div className="lxm-danger-body">
+              <div>· 它会<b>在本机记录</b>你的收听行为：听完了、听到一半切走、主动点歌、跳过等等。</div>
+              <div>· 记录会聚合成「口味画像」，<b>并交给 AI 用于主动点歌</b>（可能因此改变推荐的歌）。</div>
+              <div>· 数据<b>只存在本机</b>、不上传；可随时在 ♪ 窗口的「证据」页查看、逐条删除或清空。</div>
+              <div>· 这项能力仍在打磨中：<b>行为与数据格式都可能变化</b>，属于实验性功能。</div>
+              <div>· 关闭开关会立即停止记录，已有数据仍然保留。</div>
+            </div>
+            <div className="lxm-toolbar">
+              <button type="button" className="lxm-search-btn lxm-danger-btn" onClick={enableMemory}>
+                我已了解，开启实验性功能
+              </button>
+              <button type="button" className="lxm-btn lxm-btn-text" onClick={() => setConfirmEnable(false)}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </Window>
   )
 }

@@ -19,6 +19,7 @@ import { TASTE_SKILL, TASTE_SKILL_NAME } from './taste/skill'
 import { defaultDomainFile, migrateLegacyDomain, needsLegacyMigration, perRecordDir, readLegacyWholeUnit, restoreLegacyFile, stashLegacyFile } from './storage/migrate'
 import { storageKey } from './storage/keys'
 import { recordStatus } from './status'
+import { cancelPendingCleanup, scheduleCleanup } from './storage/cleanup'
 import type { StorageFace } from './playback'
 
 export const name = 'lx-music-for-dsh'
@@ -56,6 +57,9 @@ export const Config = z.object({
   // 一次性把旧版 single 布局的数据迁到 per-record（默认开）。
   // 关闭仅用于测试/嵌入方，避免在用户真实 $DSH_HOME 上产生写盘副作用。
   migrateLegacyDomain: z.boolean().default(true),
+  // 卸载插件时清理本机留下的数据（播放列表 / 画像 / 点歌日志 / 音源）：
+  // 延迟 + 可取消，升级触发的卸载不会误删（见 storage/cleanup.ts）。
+  cleanupOnUninstall: z.boolean().default(true),
 })
 
 const qualityEnum = zod.enum(['128k', '320k', 'flac', 'flac24bit', 'flac32bit', 'wav'])
@@ -149,23 +153,46 @@ function toSettings(config: Record<string, unknown>): PluginSettings {
   return base as unknown as PluginSettings
 }
 
-export async function apply(ctx: {
+/**
+ * 激活失败时附带的用户提示。
+ *
+ * DSH 插件页会把激活失败的原因显示在报错栏里；**只有我们自己抛的错**能带这段文字
+ * （cordis 代理抛的 `without inject`、配置校验错等在 apply 之前发生，改不了 —— 那种情况
+ * 由插件列表里的 description 与客户端卡片的提示兜底）。
+ */
+const ACTIVATION_HINT =
+  '\n\n提示：本版本安装/更新后需要**彻底退出并重启 DSH**（关窗口不算）才会加载新代码。' +
+  '若你刚更新过插件，请完全退出 DSH 后重新打开；该问题会在下个大版本修复。' +
+  '（排查入口：$DSH_HOME/lx-music-plugin-status.json 记录了激活的每个阶段）'
+
+/** 导出入口：包一层，保证激活失败既有状态记录、又带用户可读提示。 */
+export async function apply(ctx: Parameters<typeof applyInner>[0], rawConfig: Record<string, unknown>): Promise<void> {
+  try {
+    return await applyInner(ctx, rawConfig)
+  } catch (err) {
+    const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+    recordStatus({ phase: 'failed', error: `apply 抛错: ${detail}` })
+    throw err instanceof Error ? new Error(`${err.message}${ACTIVATION_HINT}`) : new Error(String(err) + ACTIVATION_HINT)
+  }
+}
+
+async function applyInner(ctx: {
   tools: { register(tool: unknown): void }
-  storageDomain?: { open(spec: unknown): Promise<unknown> }
-  skills?: { register(skill: unknown): () => void }
-  /** 可选注入钩子：skill/storage 服务在旧版/精简宿主里可能不存在，用作用域注入避免拖垮插件激活。 */
+  /** 可选注入钩子：storage/skill 服务都可能不存在，**只能**用它拿（不能直接读 ctx.xxx）。 */
   inject?: (deps: string[], fn: (scoped: { skills?: { register(skill: unknown): () => void }; storageDomain?: { open(spec: unknown): Promise<unknown> } }) => void) => unknown
   logger?: { warn(...args: unknown[]): void }
 }, rawConfig: Record<string, unknown>): Promise<void> {
-  // 进入即落盘：这样"插件到底有没有被激活"永远可查（桌面版看不到 console 输出）。
+  // ⚠️ 这里**绝不能**读 `ctx.storageDomain` / `ctx.skills`：
+  // cordis 4 的 context 代理只允许读「inject 已声明」或「本 fiber 已 provide」的服务，
+  // 否则直接抛 `cannot get property "storageDomain" without inject`
+  // （1.2.1 在 DSH 0.2.0-rc.2 上的翻车点，见 docs/development.md §4.1.1）。
+  // 可选能力一律走作用域注入 `ctx.inject([...], cb)`。
+  // 重新激活（升级 / 热重载）→ 取消上一次卸载留下的待清理，避免升级把用户数据删掉
+  cancelPendingCleanup()
+  const canInject = typeof ctx.inject === 'function'
   recordStatus({
     phase: 'enter',
-    services: {
-      tools: Boolean(ctx.tools),
-      storageDomain: Boolean(ctx.storageDomain),
-      skills: Boolean(ctx.skills),
-      inject: typeof ctx.inject === 'function',
-    },
+    services: { tools: Boolean(ctx.tools), inject: canInject },
     storage: 'pending',
   })
 
@@ -173,6 +200,8 @@ export async function apply(ctx: {
   const logger = ctx.logger ?? console
   // 迁移开关：默认开；只有显式 false / 'false' 才关闭（YAML 行配置可能给字符串）
   const migrateLegacy = !(rawConfig.migrateLegacyDomain === false || rawConfig.migrateLegacyDomain === 'false')
+  // 卸载清理开关：默认开（用户可在设置里关掉）
+  const cleanupOnUninstall = !(rawConfig.cleanupOnUninstall === false || rawConfig.cleanupOnUninstall === 'false')
 
   // 限流器（LLM 点歌防刷）
   const rateLimiter = new SlidingWindowRateLimiter({
@@ -180,23 +209,110 @@ export async function apply(ctx: {
     windowMs: 60_000,
   })
 
-  // storage domain（可选：storageDomain 服务不可用时仅内存）
-  //
-  // 注意：这里的"可选"必须与 `inject` 声明一致。1.2.0 曾把 storageDomain 写进 inject
-  // （=必需依赖），一旦存储服务没就绪，cordis **根本不调用 apply** —— 服务与工具全都不存在，
-  // 客户端表现为 `lxPlayback/*` 一律 404。现在 inject 只留 `tools`，存储走
-  // "就绪就挂上、没就绪先内存跑"的路径，并把过程写入状态文件（src/status.ts）。
-  let storage: ReturnType<typeof adaptDomain> | undefined
-  if (ctx.storageDomain) {
-    // 一次性迁移的前置：**先读旧数据、把旧文件改名搁置，再打开 domain**。
-    //
-    // 为什么顺序不能反：JSON backend 的 legacy bootstrap 会用旧文件的**原始键**当文件名
-    // （不做转义），而 `logs` 表的键是 ISO 时间戳（含冒号，Windows 文件名非法）→
-    // bootstrap 抛 ENOENT → 整个 open() 失败 → 插件静默退化成内存存储。
-    // 把旧文件改名后 bootstrap 不再触发，迁移完全由下面显式完成。
+  // 存储与音乐画像：**只能**通过作用域注入获得（见文件末尾的 ctx.inject(['storageDomain'])）。
+  // 三条历史教训都写在这里，避免再走回头路：
+  //   1. storageDomain 写进 `inject`（=必需依赖）→ 服务没就绪时 cordis 根本不调用 apply，
+  //      服务/工具全都不存在，客户端 `lxPlayback/*` 一律 404（1.2.0 的事故）；
+  //   2. 直接读 `ctx.storageDomain` → cordis 4 的代理只允许读已声明/已 provide 的服务，
+  //      否则抛 `cannot get property "storageDomain" without inject`（1.2.1 在 0.2.0 的事故）；
+  //   3. 存储打开失败必须降级为内存模式而不是让插件消失（代码里所有分支都保证这一点）。
+  let storage: StorageFace | undefined
+  let memory = normalizeMemoryConfig(undefined)
+  let tasteStore: TasteStore | undefined
+  let facade: TasteFacade | undefined
+
+  // 音乐画像三件套（store/recorder/facade）：依赖存储，因此与存储挂载绑定在一起。
+  const buildTaste = (
+    store: StorageFace,
+  ): { memory: ReturnType<typeof normalizeMemoryConfig>; tasteStore: TasteStore; recorder: TasteRecorder; facade: TasteFacade } => {
+    const resolved = normalizeMemoryConfig((store.global.get() as { memory?: unknown } | undefined)?.memory)
+    const builtStore = new TasteStore(store, {
+      onWarn: (msg, err) => {
+        logger.warn(msg, err)
+      },
+    })
+    const recorder = new TasteRecorder({
+      store: builtStore,
+      halfLifeDays: resolved.halfLifeDays,
+      exploreRatio: resolved.exploreRatio,
+      onWarn: (msg, err) => {
+        logger.warn(msg, err)
+      },
+    })
+    const builtFacade = new TasteFacade({
+      store: builtStore,
+      recorder,
+      storage: store,
+      memory: resolved,
+      onMemoryChange: (next) => {
+        // 配置热更新：半衰期/探索率立刻对捕获层生效（不必重启）；skill 与日志门控跟着开关走。
+        // ⚠️ 必须把 next 写回 apply 作用域的 memory —— logTo（点歌日志门控）读的就是它，
+        // 否则"刚开启却仍然不写日志 / 刚关闭却还在写"。
+        memory = next
+        recorder.halfLifeDays = next.halfLifeDays
+        recorder.exploreRatio = next.exploreRatio
+        syncSkill(next.enabled)
+      },
+      onWarn: (msg, err) => {
+        logger.warn(msg, err)
+      },
+    })
+    return { memory: resolved, tasteStore: builtStore, recorder, facade: builtFacade }
+  }
+
+  // 工具名收集（状态文件里记录，便于确认注册是否完整）。
+  const toolNames: string[] = []
+  const toolCtx = {
+    ...ctx,
+    tools: {
+      register: (tool: unknown) => {
+        toolNames.push(String((tool as { name?: unknown })?.name ?? '?'))
+        ctx.tools.register(tool)
+      },
+    },
+  }
+  /**
+   * 写点歌/播放行为日志（logs 表）。
+   *
+   * ⚠️ **跟着实验性开关走**：用户明确要求"没开就不记录任何音乐行为"，而 logs 表里正是
+   * play / next / prev / search 这些行为记录，所以关闭时一条都不写（存储里的历史记录保留，
+   * 用户可在设置窗口的日志页查看旧记录，或清空存储）。
+   */
+  const logTo = (target: StorageFace | undefined, entry: unknown): void => {
+    if (!memory.enabled) return
+    const row = entry as { time: string }
+    target?.table('logs').put(storageKey(row.time), entry).catch((err) => logger.warn('[lx-music-for-dsh] 日志写入失败:', err))
+  }
+
+  // 播放服务（Typert Remote：lxPlayback）。**不依赖存储**：先注册，存储就绪后再 attach。
+  const service = new PlaybackService(ctx as never, {
+    settings,
+    rateLimiter,
+    onSettingsChange: (s) => {
+      // rateLimitPerMinute 变更 → 重建限流器
+      if (s.rateLimitPerMinute !== settings.rateLimitPerMinute) {
+        rateLimiter.reset()
+        rateLimiter.setMaxCalls(s.rateLimitPerMinute)
+        settings.rateLimitPerMinute = s.rateLimitPerMinute
+      }
+    },
+    onLog: (entry) => logTo(storage, entry),
+  })
+
+  // LLM 音乐工具集（细粒度：搜索/播放/播放列表/上下首/控制 + 兼容 search_and_play）
+  registerMusicTools(toolCtx as never, { service })
+
+  /**
+   * 打开 domain 并按需做一次性迁移（不碰服务）。
+   *
+   * 迁移顺序：**先读旧数据 → 旧文件改名搁置 → 打开 → 显式迁移**。
+   * 为什么不能只靠 backend 的 legacy bootstrap：它只用旧文件的原始键当文件名（Windows 上
+   * ISO 时间戳里的冒号非法 → ENOENT → 整个 open 失败，插件静默退化成内存），而且不带 global。
+   */
+  const openStorage = async (domain: { open(spec: unknown): Promise<unknown> }): Promise<boolean> => {
     const legacyPath = defaultDomainFile()
     const legacy = readLegacyWholeUnit(legacyPath)
-    const needsMigration = migrateLegacy !== false && needsLegacyMigration(domainSpec.name)
+    const needsMigration = migrateLegacy && needsLegacyMigration(domainSpec.name)
     const stashed = needsMigration ? stashLegacyFile() : undefined
     const stashInfo = !needsMigration
       ? `不需要（目录已存在或旧文件不在：${perRecordDir(domainSpec.name)}）`
@@ -209,14 +325,12 @@ export async function apply(ctx: {
       console.info(msg)
     }
     try {
-      const domain = (await ctx.storageDomain.open(domainSpec)) as Parameters<typeof adaptDomain>[0]
-      storage = adaptDomain(domain)
-      // 显式迁移（表记录 + global）：必须在 PlaybackService 读取 global **之前**执行，
-      // 否则会先读到默认值再被覆盖。键统一过 storageKey()（旧键可能含 Windows 非法字符）。
+      const opened = (await domain.open(domainSpec)) as Parameters<typeof adaptDomain>[0]
+      const store = adaptDomain(opened)
       let migrationInfo = '无旧数据'
-      if (migrateLegacy !== false && legacy) {
+      if (migrateLegacy && legacy) {
         const result = await migrateLegacyDomain({
-          target: storage,
+          target: store,
           specTables: Object.keys(domainSpec.tables),
           legacyPath: stashed ?? legacyPath,
           legacy,
@@ -233,7 +347,9 @@ export async function apply(ctx: {
           ? `完成（${JSON.stringify(result.tables)}，global=${String(result.globalSource)}）`
           : `未完成（${result.reason}）`
       }
+      storage = store
       recordStatus({ phase: 'storage-ready', storage: 'durable', domain: 'ok', stash: stashInfo, migration: migrationInfo })
+      return true
     } catch (err) {
       // 打开失败 → 把搁置的旧文件还原，保证用户数据始终在原位、旧版本仍能读回
       const restored = restoreLegacyFile(stashed)
@@ -252,153 +368,111 @@ export async function apply(ctx: {
         domain: `打开失败: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`,
         stash: `${stashInfo}${restored ? '（已还原）' : ''}`,
       })
+      return false
     }
-  } else {
-    console.error('[lx-music-for-dsh] storageDomain 服务不可用，本次运行播放列表/设置不会持久化')
-    recordStatus({ phase: 'storage-ready', storage: 'memory', domain: 'storageDomain 服务不可用' })
   }
 
-  // 音乐画像：store（持久化）+ recorder（捕获）+ facade（UI/Remote 读写）。
-  // 默认开启，用户可在首启引导里关闭。
-  // 抽成函数是因为存储可能**迟于本插件就绪**（见下面的兜底路径），两条路都要建同一套东西。
-  const buildTaste = (
-    store: StorageFace,
-  ): { memory: ReturnType<typeof normalizeMemoryConfig>; tasteStore: TasteStore; recorder: TasteRecorder; facade: TasteFacade } => {
-    const memory = normalizeMemoryConfig((store.global.get() as { memory?: unknown } | undefined)?.memory)
-    const tasteStore = new TasteStore(store, {
-      onWarn: (msg, err) => {
-        logger.warn(msg, err)
-      },
-    })
-    const recorder = new TasteRecorder({
-      store: tasteStore,
-      halfLifeDays: memory.halfLifeDays,
-      exploreRatio: memory.exploreRatio,
-      onWarn: (msg, err) => {
-        logger.warn(msg, err)
-      },
-    })
-    const facade = new TasteFacade({
-      store: tasteStore,
-      recorder,
-      storage: store,
-      memory,
-      onMemoryChange: (next) => {
-        // 配置热更新：半衰期/探索率立刻对捕获层生效（不必重启）
-        recorder.halfLifeDays = next.halfLifeDays
-        recorder.exploreRatio = next.exploreRatio
-      },
-      onWarn: (msg, err) => {
-        logger.warn(msg, err)
-      },
-    })
-    return { memory, tasteStore, recorder, facade }
-  }
-
-  let memory = normalizeMemoryConfig(undefined)
-  let tasteStore: TasteStore | undefined
-  let facade: TasteFacade | undefined
-  if (storage) {
+  let tasteToolsRegistered = false
+  const attachStorageAndTaste = (): void => {
+    if (!storage) return
+    service.attachStorage(storage)
     const built = buildTaste(storage)
     memory = built.memory
     tasteStore = built.tasteStore
     facade = built.facade
+    syncSkill(memory.enabled)
+    service.attachTaste(built.facade, built.facade)
+    if (!tasteToolsRegistered) {
+      registerTasteTools(toolCtx as never, {
+        service,
+        store: built.tasteStore,
+        memory: built.memory,
+        onLog: (entry) => logTo(storage, entry),
+      })
+      tasteToolsRegistered = true
+    }
   }
 
-  // 播放服务（Typert Remote：lxPlayback）
-  const service = new PlaybackService(ctx as never, {
-    storage,
-    settings,
-    rateLimiter,
-    ...(facade ? { taste: facade, tasteUi: facade } : {}),
-    onSettingsChange: (s) => {
-      // rateLimitPerMinute 变更 → 重建限流器
-      if (s.rateLimitPerMinute !== settings.rateLimitPerMinute) {
-        rateLimiter.reset()
-        rateLimiter.setMaxCalls(s.rateLimitPerMinute)
-        settings.rateLimitPerMinute = s.rateLimitPerMinute
-      }
-    },
-    onLog: (entry) => {
-      if (storage) {
-        storage.table('logs').put(storageKey(entry.time), entry).catch((err) => logger.warn('[lx-music-for-dsh] 日志写入失败:', err))
-      }
-    },
+  // 存储的**唯一**入口：作用域注入。
+  // 已就绪 → 同步回调；稍后就绪（加载顺序/热重载）→ 回调仍会触发。启动时若拿不到，
+  // 插件已经在内存模式下可用（服务 + 音乐工具都在），这正是 1.2.0 缺的那一环。
+  ctx.inject?.(['storageDomain'], (scoped) => {
+    const domain = scoped.storageDomain
+    if (!domain) return
+    void openStorage(domain)
+      .then((ok) => {
+        if (!ok || !storage) return
+        attachStorageAndTaste()
+        const status = `[lx-music-for-dsh] 存储已就绪，provider: ${service.getProviderMode()}，工具: ${toolNames.length}`
+        logger.warn(status)
+        console.info(status)
+        recordStatus({ phase: 'ready', storage: 'durable', domain: '已挂载存储与画像', tools: toolNames })
+      })
+      .catch((err) => {
+        logger.warn('[lx-music-for-dsh] 存储挂载失败，继续以内存模式运行:', err)
+        recordStatus({
+          phase: 'failed',
+          storage: 'memory',
+          error: `挂载失败: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`,
+          tools: toolNames,
+        })
+      })
   })
-
-  // LLM 音乐工具集（细粒度：搜索/播放/播放列表/上下首/控制 + 兼容 search_and_play）
-  const toolNames: string[] = []
-  const toolCtx = { ...ctx, tools: { register: (tool: unknown) => { toolNames.push(String((tool as { name?: unknown })?.name ?? '?')); ctx.tools.register(tool) } } }
-  registerMusicTools(toolCtx as never, { service })
-
-  // 画像工具集（music_profile / music_play_song / music_taste）：
-  // 有 storage 就注册（画像被关闭时工具会明确回"已关闭"，而不是让模型以为能力不存在）
-  const logTo = (target: StorageFace | undefined, entry: { time: string }) => {
-    target?.table('logs').put(storageKey(entry.time), entry).catch((err) => logger.warn('[lx-music-for-dsh] 日志写入失败:', err))
-  }
-  if (tasteStore) {
-    registerTasteTools(toolCtx as never, {
-      service,
-      store: tasteStore,
-      memory,
-      onLog: (entry) => logTo(storage, entry),
-    })
-  }
-
-  // 存储迟到就绪的兜底：`inject` 只声明了 tools，所以即使 apply 开始时 storageDomain 还没
-  // 绑定（服务加载顺序/热重载都会造成），插件也**已经**可用（服务 + 音乐工具在内存模式下工作）。
-  // 存储一旦可用，再把持久层与画像挂上去，不必重启插件。
-  if (!storage && typeof ctx.inject === 'function') {
-    ctx.inject(['storageDomain'], (scoped) => {
-      const late = scoped.storageDomain
-      if (!late) return
-      void (async () => {
-        let lateStorage: StorageFace | undefined
-        try {
-          const legacyPath = defaultDomainFile()
-          const legacy = readLegacyWholeUnit(legacyPath)
-          const needsMigration = migrateLegacy !== false && needsLegacyMigration(domainSpec.name)
-          const stashed = needsMigration ? stashLegacyFile() : undefined
-          const domain = (await late.open(domainSpec)) as Parameters<typeof adaptDomain>[0]
-          lateStorage = adaptDomain(domain)
-          if (migrateLegacy !== false && legacy) {
-            await migrateLegacyDomain({ target: lateStorage, specTables: Object.keys(domainSpec.tables), legacyPath: stashed ?? legacyPath, legacy, warn: (m) => logger.warn(m) })
-          }
-          service.attachStorage(lateStorage)
-          const built = buildTaste(lateStorage)
-          service.attachTaste(built.facade, built.facade)
-          registerTasteTools(toolCtx as never, { service, store: built.tasteStore, memory: built.memory, onLog: (entry) => logTo(lateStorage, entry) })
-          recordStatus({ phase: 'ready', storage: 'durable', domain: 'ok（迟到挂载）', stash: stashed ? `已搁置 → ${stashed}` : '未触发', tools: toolNames })
-        } catch (err) {
-          logger.warn('[lx-music-for-dsh] 存储迟到挂载失败，继续以内存模式运行:', err)
-          recordStatus({ phase: 'failed', storage: 'memory', error: `迟到挂载失败: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`, tools: toolNames })
-        }
-      })()
-    })
-  }
 
   // 插件自带的 skill：把"先查画像 → 精确播放"的流程随插件版本一起发布。
   // 用作用域注入（而不是写进 inject 数组）：skill 服务在旧版/精简宿主里可能不存在，
   // 写进 inject 会让整个插件拒绝激活，而作用域注入只在该服务可用时才跑回调。
-  ctx.inject?.(['skills'], (scoped) => {
+  //
+  // ⚠️ skill **跟着画像开关走**：画像是实验性功能且默认关闭，此时不该让模型以为有这套能力
+  // （否则它会去调 music_profile 然后拿到"已关闭"）。开启/关闭即时生效，无需重启。
+  let skillsService: { register(skill: unknown): () => void } | undefined
+  let skillDisposer: (() => void) | undefined
+  const syncSkill = (enabled: boolean): void => {
+    if (!skillsService) return
     try {
-      scoped.skills?.register(TASTE_SKILL)
-      console.info(`[lx-music-for-dsh] 已注册 skill: ${TASTE_SKILL_NAME}`)
+      if (enabled && !skillDisposer) {
+        skillDisposer = skillsService.register(TASTE_SKILL)
+        console.info(`[lx-music-for-dsh] 已注册 skill: ${TASTE_SKILL_NAME}（画像已开启）`)
+      } else if (!enabled && skillDisposer) {
+        skillDisposer()
+        skillDisposer = undefined
+        console.info(`[lx-music-for-dsh] 画像已关闭，撤下 skill: ${TASTE_SKILL_NAME}`)
+      }
     } catch (err) {
       logger.warn('[lx-music-for-dsh] skill 注册失败（不影响其它功能）:', err)
     }
+  }
+  ctx.inject?.(['skills'], (scoped) => {
+    skillsService = scoped.skills
+    syncSkill(memory.enabled)
   })
 
-  // 插件卸载时释放音源子进程（避免孤儿进程）并结算当前画像会话
+  // 插件卸载时释放音源子进程（避免孤儿进程）、结算当前画像会话，并按配置**清理本地数据**。
+  //
+  // ⚠️ 清理是「延迟 + 可取消」的：DSH 升级插件同样是"卸载旧包 → 安装新包"，都会触发 dispose。
+  // 立刻删会让用户每次升级都丢播放列表与画像，所以延迟 8 秒，只要期间插件重新激活就取消
+  // （apply 开头调用 cancelPendingCleanup）。
   const disposeHook = (ctx as { on?: (event: string, fn: () => void) => void }).on
   disposeHook?.('dispose', () => {
     facade?.flush()
     service.disposeProvider()
+    if (!cleanupOnUninstall) return
+    scheduleCleanup({
+      onDone: (result) => {
+        // 状态文件此时已被删除，只能写 stdout / ctx.logger
+        const msg = `[lx-music-for-dsh] 卸载清理：删除 ${result.removed.length} 项本地数据${
+          result.failed.length > 0 ? `，${result.failed.length} 项失败（${result.failed.map((f) => f.path).join(', ')}）` : ''
+        }`
+        logger.warn(msg)
+        console.info(msg)
+      },
+    })
   })
 
   // ctx.logger 的去向由宿主决定（可能被日志级别过滤），启动行同时写 stdout，
   // 便于按 docs/development.md §4.1 在启动 dsh 的终端直接确认插件是否加载。
-  const status = `[lx-music-for-dsh] 插件已加载，provider: ${service.getProviderMode()}，storage: ${storage ? 'durable' : 'memory'}，工具: ${toolNames.length}`
+  const tasteState = !tasteStore ? '未挂载' : memory.enabled ? '开' : '关（实验性功能默认关闭）'
+  const status = `[lx-music-for-dsh] 插件已加载，provider: ${service.getProviderMode()}，storage: ${storage ? 'durable' : 'pending/memory'}，画像: ${tasteState}，工具: ${toolNames.length}`
   logger.warn(status)
   console.info(status)
   recordStatus({ phase: 'ready', storage: storage ? 'durable' : 'memory', tools: toolNames })
