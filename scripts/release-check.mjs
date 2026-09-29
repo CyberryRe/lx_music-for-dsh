@@ -69,14 +69,16 @@ else bad(`版本号不一致（package=${pkg.version} manifest=${manifest.versio
 
 // ── 2) 工作区与 tag ─────────────────────────────────────────────────────────
 step('git 状态与 tag')
-const status = run('git', ['status', '--porcelain'])
+// ⚠️ 必须用 runCapture：run() 只看退出码、不返回 stdout，
+// 用它读 `git status --porcelain` 会永远拿到空串 → 永远报"工作区干净"（假绿）。
+const status = runCapture('git', ['status', '--porcelain'])
 if (status.ok && status.out.trim() === '') ok('工作区干净')
-else bad('工作区有未提交改动（发布前先提交）')
-const head = run('git', ['rev-parse', 'HEAD'])
+else bad(`工作区有未提交改动（发布前先提交）：${status.out.trim().split('\n').slice(0, 8).join(' / ')}`)
+const head = runCapture('git', ['rev-parse', 'HEAD'])
 const tagName = `v${pkg.version}`
-const tagRef = run('git', ['rev-parse', '-q', '--verify', `refs/tags/${tagName}`])
+const tagRef = runCapture('git', ['rev-parse', '-q', '--verify', `refs/tags/${tagName}`])
 if (tagRef.ok && tagRef.out.trim() === head.out.trim()) ok(`tag ${tagName} 已指向 HEAD`)
-else if (tagRef.ok) bad(`tag ${tagName} 存在但不指向 HEAD（先删掉重打）`)
+else if (tagRef.ok) info(`tag ${tagName} 已存在但不指向 HEAD（发布后追加文档提交属正常；若要重发就删掉重打）`)
 else info(`还没有 tag ${tagName} → 发布时执行：git tag -a ${tagName} -m "…" && git push origin main ${tagName}`)
 
 // ── 3) 随包 patch 与 Config schema ──────────────────────────────────────────
