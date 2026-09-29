@@ -66,6 +66,14 @@ npm deprecate "lx-music-for-dsh@<版本>" ""      # bash / zsh
 cmd /c 'npm deprecate "lx-music-for-dsh@<版本>" ""'   # Windows PowerShell 5.1
 ```
 
+> ⚠️ **撤回后必须用完整 packument 复核**：精简文档（`accept: application/vnd.npm.install-v1+json`，
+> `npm view` 默认走的就是它）会**省略** `deprecated: ""` 这种空字符串字段，于是"已撤回"和"字段还在但为空"
+> 看起来一样——本仓库踩过这个坑（自检误报"正常"）。用 `npm run npm:state`（读完整 packument，
+> 区分「字段不存在」与「存在但为空串」）确认；也顺带打印 dist-tags。
+>
+> npmjs.com 上**版本号变红 = 被标记弃用**，页面有缓存（硬刷新 Ctrl+F5）；以 registry 输出为准。
+> 另外 Status 列的绿色 `Published` 只表示"已发布"，不是"未弃用"。
+
 > ⚠️ Windows PowerShell 5.1 会把**空字符串参数直接吞掉**（实测 `node -e "…" ""` 收到的 argv 长度为 1），
 > 于是 `npm deprecate pkg ""` 会报用法错误。必须用 `cmd /c '…'` 包一层（此时空参数能正常传入，
 > argv 长度 2）。PowerShell 7.3+ 默认已修好这个行为。

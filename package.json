@@ -47,6 +47,7 @@
     "lint": "eslint src tests scripts --max-warnings 0",
     "pack": "node scripts/build.mjs && npm pack",
     "release:check": "node scripts/release-check.mjs",
+    "npm:state": "node scripts/npm-state.mjs",
     "setup": "node scripts/link-dsh.mjs",
     "install:dsh": "node scripts/install-to-dsh.mjs",
     "smoke:browser": "node scripts/browser-smoke.mjs",
