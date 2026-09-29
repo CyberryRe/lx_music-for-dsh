@@ -41,7 +41,7 @@ on:
         default: true
 
 permissions:
-  contents: read
+  contents: write # 创建 GitHub Release（附 tarball）
   id-token: write # OIDC 可信发布所必需
 
 concurrency:
@@ -120,6 +120,16 @@ jobs:
       # 让 latest 与 lts 指向同一版本（1.1.0 起同一条线兼容 DSH 0.1.5～0.1.7）。
       # dist-tag 属于 npm 的"写操作"，OIDC 凭据是否覆盖它取决于可信发布的作用域，
       # 所以这里不阻断发布：失败时维护者用 --otp 手动补一次即可（见文件头说明）。
+      # 把 tarball 作为 Release 附件：README 的「下载 Release 里的预构建包」安装方式依赖它。
+      # 只在 tag 触发时做（workflow_dispatch 的 dry-run 不建 Release）。
+      - name: 创建 GitHub Release
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.tgz \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "安装：下载下面的 .tgz 后执行 \`dsh plugin --profile <profile> add <tgz 路径>\`（或 \`npm i lx-music-for-dsh@${GITHUB_REF_NAME#v}\`）。装好后请**彻底退出并重启 DSH**。详见 README。"
       - name: 追加 lts dist-tag
         if: startsWith(github.ref, 'refs/tags/') && inputs.dry-run != 'true'
         continue-on-error: true

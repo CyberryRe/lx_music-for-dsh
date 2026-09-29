@@ -1,227 +1,75 @@
 # lx-music-for-dsh
 
 LX Music 增强控制插件 —— 为 [deepseek_harness](https://github.com/deepseek-ai/deepseek-harness)
-Web 模式提供 LX Music 播放控制界面与 LLM 点歌能力。
+提供侧边栏播放卡片、播放/音源管理界面与 LLM 点歌能力。**开箱即用，不需要任何外部服务。**
 
 ## 功能
 
-- **侧边栏迷你播放卡片**（位于「设置」按钮上方）：封面缩略图、歌名-歌手、可拖动/点击跳转的
-  进度条（与播放器双向同步）、上一首/播放暂停/下一首、播放模式切换按钮（列表循环/单曲循环/
-  随机/顺序，点击循环切换）、播放列表弹窗（内含四模式直接选择）、设置齿轮。
+- **侧边栏迷你播放卡片**（位于「设置」按钮上方）：封面、歌名-歌手、可拖动/点击跳转的进度条、
+  上一首/播放暂停/下一首、播放模式切换（列表循环/单曲循环/随机/顺序，点击循环切换）、
+  播放列表弹窗、设置齿轮。
 - **主窗口**（点击卡片主体打开，可调大小、记忆位置）：搜索（关键词/歌手/平台过滤）、
-  搜索结果（音质标识、时长、+队尾 / +下一首）、播放列表管理（拖拽排序、删除、清空、导出为文本，
-  播放模式分段按钮）。
-- **播放模式**：列表循环（默认，播完回第一首）/ 单曲循环（播完自动重播）/ 随机播放（不重复当前曲目）/
-  顺序播放（播完最后一首停止）；host 侧权威状态，持久化，UI 与 LLM 工具共用。
-- **设置窗口**（点击齿轮打开）：音源管理（文件/URL/粘贴导入并自动启用、启用/禁用/删除/排序）、
-  音质策略（全局默认音质、每音源平台优先级）、自动拉取规则（切歌自动最高音质、降级策略）。
-- **细粒度 LLM 音乐工具集**：`music_search`（搜索）/ `music_play`（播放）/ `music_playlist`
-  （播放列表管理）/ `music_prev` / `music_next` / `music_control`（暂停、音量、音质、播放模式等），
-  另保留兼容入口 `search_and_play`（一步点歌）；内置滑动窗口防刷（默认 6 次/分钟）与带 action 的操作日志。
-- **音乐画像（1.2.0，实验性 · 默认关闭）**：`music_profile`（读口味画像与"可直取"的曲目候选；
-  `for-mood` 看某情境下的偏好，`explore-brief` 给"没听过但在口味范围内"的确定候选）/
-  `music_play_song`（**精确点播**一首确定的歌：优先用画像里已确认的平台 id 零搜索播放，
-  退化到按曲名+艺人严格确认，确认不到就明确失败——不会拿翻唱或别的版本顶替）/
-  `music_taste`（读写口味：`like`/`dislike`/`forget`/`note`/`summary`）。
-  画像由本地算法从真实收听行为中生长（完整播放 +2、AI 放的被切走只按 0.3 记艺人维度、
-  探索失败再打 0.25 折），**只在终态落库**（每秒的进度回调不写盘），全部在本地处理、不上传。
-  另随插件注册一个 skill（`taste-aware-picking`），把"先查画像 → 挑一首确定的歌 → 精确播放"
-  的流程版本化；它**只在被触发时加载**，平时不占 token。
+  搜索结果（音质/时长、+队尾 / +下一首）、播放列表管理（拖拽排序、删除、清空、导出文本）。
+- **设置窗口**（点击齿轮）：音源管理（文件/URL/粘贴导入并自动启用、启停/删除/排序）、
+  音质策略（默认音质、平台优先级）、自动拉取规则（切歌自动最高音质、降级策略）。
+- **细粒度 LLM 音乐工具集**：`music_search` / `music_play` / `music_playlist` /
+  `music_prev` / `music_next` / `music_control`，以及兼容入口 `search_and_play`；
+  内置滑动窗口防刷（默认 6 次/分钟）。
+- **音乐画像（实验性 · 默认关闭）**：`music_profile` 读口味画像与"可直取"的曲目候选；
+  `music_play_song` **精确点播**一首确定的歌（优先用画像里已确认的平台 id 零搜索播放，
+  退化到按曲名+艺人严格确认，确认不到就明确失败——不会拿翻唱或别的版本顶替）；
+  `music_taste` 读写口味（`like`/`dislike`/`forget`/`note`/`summary`）。
+  另随插件注册 skill `taste-aware-picking`，把"先查画像 → 挑一首确定的歌 → 精确播放"流程版本化。
 
-  ⚠️ **这是实验性功能，默认关闭**，需要显式开启（还要打磨，行为与数据格式都可能变）：
-
-  - **入口**：设置窗口（卡片上的 ⚙）→「**实验性**」页 → 红色警示条 →「了解风险并开启…」→
-    确认框里点「我已了解，开启实验性功能」。**只有这里**能开启，且会写下显式凭证
-    （`memory.experimentalOptInAt`）——老版本默认开启时代留下的 `enabled: true` **不算凭证**，
-    升级后自动按关闭处理（否则会出现"用户升级后仍在被记录"）。
-  - **关闭时的行为**：不采集任何收听行为、不写点歌日志、不注册 `taste-aware-picking` skill、
-    卡片上**不显示 ♪ 入口**（`openTaste` 也会被挡回）；已有数据保留，随时可以重新开启。
-  - **开启后**：卡片出现 ♪ 入口，「我的口味」窗口可见画像/证据/设置；关闭按钮在
-    设置窗口的「实验性」页（关闭是即时的，无需重启）。
-
-> **本地数据与卸载清理**：插件写在本机的东西只有 `$DSH_HOME/storages/lx_music/`（per-record 目录，
-> 含播放列表/设置/画像/点歌日志/音源）、旧版遗留的 `lx_music.json.migrated-*`、音源兜底文件
-> `lx-music-sources.json*` 与诊断文件 `lx-music-plugin-status.json`。**卸载插件时会自动把它们全部删除**
-> （延迟 8 秒执行，若期间插件重新激活——即升级/热重载——则取消，避免升级丢数据）；
-> 也可以随时在「设置 → 实验性 → 清理本机数据」里点「彻底清除本地数据」
-> （清空播放列表 + 画像 + 点歌日志，音源脚本保留，需二次确认）。
-> 不想要卸载清理就在行配置里写 `cleanupOnUninstall: false`。
-
-> 状态持久化（播放列表/音量/音质/播放模式/点歌日志/音源脚本/画像）走 DSH storage domain
-> （1.2.0 起为 per-record 布局：`$DSH_HOME/storages/lx_music/` 目录，旧 `lx_music.json` 会被
-> 自动迁移且原样保留）；storage domain 不可用时降级为内存 + 音源文件兜底，
-> 并在启动日志与 stderr 明确告警。
-
-## 架构
-
-- **完全独立**：搜索由**内置音乐 SDK** 提供（移植自 lx-music-desktop，酷我/酷狗/QQ音乐/网易云/咪咕
-  五平台）；直链解析由**内置音源脚本引擎**提供（子进程隔离执行 lx-music-desktop 音源脚本协议，
-  与 lx-music-desktop v2.12.2 一致——直链 100% 依赖音源脚本）；播放为浏览器 HTML5 Audio。
-  无需任何外部服务即可使用。
-- **安全模型**：第三方音源脚本（不可信 JS）在**独立子进程**中执行（每个音源一个子进程），
-  宿主 DSH 进程只通过 IPC 与其交换 JSON 消息；子进程环境为白名单（不含任何 DSH 机密）、
-  网络请求带 **SSRF 防护**（默认拦截私网/回环/链路本地地址）、初始化/调用超时自动杀进程兜底。
-  脚本的任何故障——异常、逃逸尝试（如 `Buffer.constructor('return process')`）、死循环——
-  都被限制在子进程内，下一次调用自动重启，宿主进程不受影响。
-- host（Node）：`PlaybackService`（Typert Remote `lxPlayback`，播放权威状态 + 播放模式 + storage 持久化）、
-  细粒度音乐工具集（`music_search`/`music_play`/`music_playlist`/`music_prev`/`music_next`/`music_control`
-  及兼容 `search_and_play`）、内置 SDK 搜索、音源脚本子进程沙箱（导入/启用/排序/删除本地管理）、
-  可选 lxserver 客户端（超时 10s / 重试 2 次 / 音质与平台降级链）。
-- client（浏览器）：React UI（注入 `sidebar.footer.action` slot）+ HTML5 Audio 播放引擎，
-  轮询 host 状态（500ms）diff 应用，进度节流上报（1s）。
-- provider 门面（`providerMode`）：`auto`（默认，有地址用 lxserver 否则内置引擎）/ `engine`（强制内置引擎）/
-  `lxserver`（连接 lxserver 同步服务器）/ `mock`（内置演示数据，用于无网络演示）。
-
-## ⚠️ 安装/更新后必须彻底重启 DSH
-
-本版本（1.2.2）**修改了插件代码后必须完全退出 DSH 再启动**（关窗口不算）才会加载新代码：
-DSH 的插件页/卡片会一直显示上一次启动时的旧状态，容易误判成"装了还是不行"。
-**这是已知问题，会在下个大版本修复。**
-
-- 判断插件有没有真正激活：看 `$DSH_HOME/lx-music-plugin-status.json`
-  （存在 = host 半边被调用过，里面按阶段记录了 storage 是否就绪、注册了几个工具；不存在 = 压根没被调用）。
-- 判断"跑的是不是新代码"：对比应用进程启动时间与插件包文件时间。
-- 排查顺序：① 彻底重启 → ② 看上面的状态文件 → ③ 看插件页报错。
+  > ⚠️ **实验性功能，默认关闭**：开启入口在 设置 →「实验性」页 → 红色警示 →
+  「了解风险并开启…」→ 确认框。**未开启时**：不采集任何收听行为、不写点歌日志、不注册 skill、
+  卡片上不显示 ♪ 入口。数据全部在本机处理、不上传；卸载插件时会自动清理（详见
+  [技术说明](docs/internals.md) §4，可随时在「设置 → 实验性 → 清理本机数据」手动清除）。
 
 ## 快速开始
 
-```bash
-npm install && node scripts/link-dsh.mjs   # 镜像 DSH 运行时（版本不一致会自动刷新）
-npm run lint && npm run typecheck && npm run build && npm test
-# 可选：真实网络冒烟（五平台搜索）
-node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
-```
-
-`link-dsh.mjs` 优先用 `--from <dir>` / `$DSH_RUNTIME_DIR` 指定的树，否则用项目内
-`node_modules/@deepseek-ai/dsh`、再退回全局 npm 安装；并会读取桌面版 `app.asar` 的版本做
-**漂移防护**：镜像来源与桌面版不一致时**直接拒绝执行**（装错版本会静默把开发树换成错误的
-API 表面），确认要用就加 `--allow-drift`。桌面版 asar 内只有运行时 JS（`.d.ts` 已剥离），
-不能用于类型检查，所以只用于版本比对。
-
-安装到 DSH（要求 `@deepseek-ai/dsh` ≥ 0.1.7-rc.2）：
+**方式一：npm（推荐）**
 
 ```bash
-node scripts/install-to-dsh.mjs            # 打包 + dsh plugin add + 旧版残留迁移校验
-# 然后重启 dsh web 并刷新浏览器
+npm i lx-music-for-dsh@latest
+dsh plugin --profile <你的profile> add lx-music-for-dsh@latest
 ```
 
-插件包用 `dsh.bundle.patch` 声明为 profile 组合层，`dsh plugin add` 会自动激活，
-无需手工编辑 profile 的 `cordis.patch.yml`。详见 [docs/development.md](docs/development.md)（§6）。
+**方式二：下载 Release 里的预构建包（离线可用，不需要构建、不需要 allowBuilds）**
 
-### 给使用者的两种安装方式
+从 [Releases](https://github.com/CyberryRe/lx-music-for-dsh/releases) 下载
+`lx-music-for-dsh-<版本>.tgz`，然后：
 
 ```bash
-# 方式一：npm（推荐）
-npm i lx-music-for-dsh@1.2.0
-dsh plugin --profile web add lx-music-for-dsh@1.2.0
-
-# 方式二：GitHub Release 的预构建包（离线可用，不需要构建脚本、不需要 allowBuilds）
-pnpm add https://github.com/CyberryRe/lx_music-for-dsh/releases/download/v1.2.0/lx-music-for-dsh-1.1.0.tgz
+dsh plugin --profile <你的profile> add <下载下来的 .tgz 完整路径>
 ```
 
-> ✅ **1.1.0 同时兼容 DSH 0.1.5 与 0.1.7**（client 面同时携带两代 codec 契约），所以默认装最新版即可，
-> 不需要再按 DSH 版本挑插件版本。
->
-> 旧版本是互斥的，仅作参考：**1.0.2** 只能在 0.1.7 及以后用；**1.0.1** 只能在 0.1.5 及更早用。
-> 装错会让 client 插件整体激活失败（`web boot: N entries did not activate`），而 host 端日志看起来完全正常。
->
-> 另外**不要**用 `github:CyberryRe/lx_music-for-dsh#v1.1.0` 这种 git 依赖写法：pnpm ≥10.26
-> 默认禁止 git 依赖执行 `prepare`，而本仓库的 `lib/` 不在 git 里、必须现场构建。原因见
-> [docs/development.md](docs/development.md) §6.4。
+装好后 **彻底退出并重启 DSH**（关窗口不算）——本版本修改插件代码后必须完全重启才会加载新代码，
+插件页/卡片会一直显示上一次启动时的旧状态。**这是已知问题，会在下个大版本修复。**
 
-端到端验证（真实浏览器，需要本机有 Chrome/Edge）：
+确认是否生效：看 `$DSH_HOME/lx-music-plugin-status.json`（存在即说明 host 半边被调用过，
+里面按阶段记录了 storage 是否就绪、注册了几个工具）。排查步骤见
+[技术说明 §5.2](docs/internals.md#52-插件没生效装了没反应--插件页显示异常)。
 
-```bash
-node scripts/browser-smoke.mjs "http://127.0.0.1:3099/?token=<token>"
-```
-
-## 直链解析失败排查
-
-解析失败时错误会出现在三个位置：
-
-1. **侧边栏卡片 / 主窗口**：显示聚合后的错误摘要（含每个音源脚本的失败原因）。
-2. **浏览器 Console**：`[lx-music] 直链解析失败: ...`，包含完整错误消息与**最近 5 条音源脚本 HTTP 请求**（`状态码:URL(耗时)`）。
-3. **宿主进程 stdout**（`dsh web` 所在终端）：每个脚本的完整错误堆栈 + `[lx-music sandbox] 音源脚本请求 HTTP <code>: <url>` 非 2xx 告警。
-
-按状态码判断根因：
-
-- `HTTP 403`：第三方 API 拒绝（IP 封禁 / 风控 / UA 校验）——换网络或换音源。
-- `HTTP 503`：第三方 API 不可用（onrender 免费实例休眠、配额耗尽或宕机）——重试或稍后再试；手机端能播多半是**缓存了旧直链**或使用了其他音源。
-- `timeout` / `ERR`：网络不可达。
-- `HTTP 200` 但仍报错：API 返回结构异常或脚本逻辑问题（可看宿主端脚本堆栈定位到具体行）。
-
-音源健康检查：`node scripts/compile-tests.mjs && node scripts/smoke-source.mjs <音源URL> [平台] [关键词]`
-
-## 文档
-
-- [开发文档（调试/打包/安装/测试/验收）](docs/development.md)
-
-## 目录
-
-```
-package.json      npm 包 + dsh.bundle / dsh.client 声明
-cordis.patch.yml  组合层 patch（dsh plugin add 后自动生效的插件行）
-manifest.json     插件清单（元数据：入口、生命周期、工具、配置项）
-src/index.ts      host 入口
-src/client.ts     client 入口
-src/ui/           React 组件
-tests/            单元测试（385 例）
-docs/             开发文档 / DSH 与 LX Music 研读笔记
-```
-
-## 版本兼容性
+## DSH 版本兼容性对照表
 
 | 插件版本 | 适配 DSH | 状态 |
 |---|---|---|
-| **1.2.2** | **0.1.5 / 0.1.7 / 0.2.0-rc.2** | **推荐**（`latest` / `lts`）：可选依赖改作用域注入（适配 0.2.0）；音乐画像实验性、默认关闭；卸载清理本地数据 |
-| 1.1.0 | 0.1.7-rc.2（0.1.5 亦可用） | 0.2.0+ 上无法激活；继续留在 0.1.x 的用户可用 |
-| 1.0.2 / 1.0.1 / 1.0.0 | 见台账 | 历史版本，按 DSH 版本配对使用 |
+| **1.2.2** | **0.1.5 / 0.1.7 / 0.2.0-rc.2** | **推荐**（npm `latest` / `lts`）。可选依赖改作用域注入（适配 0.2.0）；音乐画像实验性、默认关闭；卸载清理本地数据 |
+| **1.1.0** | **0.1.7-rc.2（0.1.5 亦可用）** | ⚠️ **仅适用于 DSH 0.1.7-rc.2**：0.2.0 及以上**无法激活**（插件不工作）。仍留在 0.1.x 的用户可继续使用；0.2.0+ 请装 1.2.2 |
+| 1.0.2 | 0.1.7 及以后 | 历史版本，仅 0.1.7+ 可用（strict codec 契约切到 `create()`） |
+| 1.0.1 | 0.1.5 及更早 | 历史版本，仅 0.1.5- 可用（0.1.7+ 不兼容） |
 
-完整对照表、每次 DSH 跳跃的**断裂点**、发布流程与 dist-tag 规则都在
-[docs/versioning.md](docs/versioning.md)；发布前跑 `npm run release:check` 一次即可。
-升级到 1.2.2 **不需要动 DSH 版本**：插件配置格式没变，存储布局的迁移是自动的
-（旧的 `lx_music.json` 会改名为 `lx_music.json.migrated-<时间戳>` 保留，可随时回退）。
-`latest` 与 `lts` 都指向当前推荐线（1.2.2）：
+- 全部已发布版本、每个版本的可用性说明、发布流程与 dist-tag 规则：
+  [docs/versioning.md](docs/versioning.md)。
+- 升级到 1.2.2 **不需要动 DSH 版本**；存储布局迁移自动完成（旧 `lx_music.json` 会改名为
+  `lx_music.json.migrated-<时间戳>` 保留，可随时回退）。
 
-```bash
-npm i lx-music-for-dsh@latest   # 或 @lts
-```
-### 为什么之前需要"按 DSH 版本配对安装"
+## 文档
 
-0.1.5 与 0.1.7 的 Typert strict codec 契约正好**相反**（都在"校验字段存在 + 用它 parse"）：
-
-| | 0.1.5 | 0.1.7 |
-|---|---|---|
-| 校验 | `typeof codec.schema.parse === 'function'` | `typeof codec.create === 'function'` |
-| 解码 | `codec.schema.parse(v)` | `codec.create().parse(v)` |
-
-只满足一边的 descriptor 会在 `ctx.remote.$mount()` 抛
-`strict codec has no create() factory`（或 0.1.5 侧的 `has no parse() method`），导致整个
-client 插件无法激活（GUI 报 `web boot: N entries did not activate`，侧边栏卡片直接不出现），
-而 **host 端日志完全正常**，极易误判为"插件没问题"。
-
-1.1.0 的做法是**两个字段同时提供**（双方都只读自己那一个字段，多出来的字段不会被拒绝），
-并用 `tests/remote-contribution.test.ts` 逐字复刻**两个版本**的校验+解码路径来锁定。
-descriptor 的**类型**直接绑 DSH 真实协议类型（`import type … from '@deepseek-ai/dsh-typert-protocol'`），
-协议再漂移会在 `tsc` 阶段暴露。
-
-### 桌面版（Electron 宿主）的沙箱子进程
-
-桌面版里插件跑在 Electron 主进程，`process.execPath` 是 **Electron 主程序**而不是 node。
-1.0.x 直接用它 spawn 音源 runner，会再起一个 GUI 实例并因单实例锁立刻以 `code=0` 退出，
-表现为「音源 X 子进程在初始化期间退出（code=0）」，音源校验/导入全部失败。
-1.1.0 给子进程注入 `ELECTRON_RUN_AS_NODE=1`（DSH 自己起内部 Node 脚本也用这一招），
-`tests/sandbox-env.test.ts` 锁定该行为与环境白名单的安全边界。
-
-从 1.0.0 升级到 1.0.1 要处理两件事（第 2 件自动完成）：
-
-1. 删掉 profile `cordis.patch.yml` 里手工 `insert` 的 `id: lx-music` 行
-   （或用 `scripts/install-to-dsh.mjs` 自动迁移并备份），否则同一 id 会让 dsh 启动失败
-   （`duplicate loader entry id: lx-music`）。
-2. 1.0.1 修好了 storage domain 的 schema：1.0.0 里它每次 `open` 都失败，插件静默降级为内存存储
-   —— 播放列表/设置/播放模式/日志都不落盘。修好后 domain 里的音源快照会比旧版兜底文件
-   `$DSH_HOME/storages/lx-music-sources.json` 更旧，插件会自动做一次非破坏性合并，并把该文件
-   改名为 `.migrated-<时间戳>`。
-
-启动日志确认状态：`[lx-music-for-dsh] 插件已加载，provider: engine，storage: durable`
-（`storage: memory` 表示持久化不可用）。细节见 [docs/development.md](docs/development.md) §10。
+| 文档 | 内容 |
+|---|---|
+| [技术说明](docs/internals.md) | 架构、音源脚本沙箱与安全模型、Electron 宿主、codec 双契约、存储与本地数据、排查手册 |
+| [版本台账](docs/versioning.md) | 插件 × DSH 对照、每次 DSH 跳跃的断裂点、发布流程与 dist-tag 规则 |
+| [开发文档](docs/development.md) | 本地构建/调试/打包/测试、按 DSH 版本安装、验收清单 |
+| [画像设计](docs/design-taste-memory.md) | 音乐画像的算法设计与验证结论 |
