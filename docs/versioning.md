@@ -59,6 +59,18 @@ npm dist-tag add lx-music-for-dsh@1.2.2 lts           # 让 lts 与 latest 指�
 npm deprecate "lx-music-for-dsh@<旧版本>" "<它适配哪代 DSH>：<在哪些版本上不工作>。<该用什么替代>。"
 ```
 
+**撤回（撤销）弃用**：用**空说明**覆盖即可，不需要重新发布：
+
+```bash
+npm deprecate "lx-music-for-dsh@<版本>" ""      # bash / zsh
+cmd /c 'npm deprecate "lx-music-for-dsh@<版本>" ""'   # Windows PowerShell 5.1
+```
+
+> ⚠️ Windows PowerShell 5.1 会把**空字符串参数直接吞掉**（实测 `node -e "…" ""` 收到的 argv 长度为 1），
+> 于是 `npm deprecate pkg ""` 会报用法错误。必须用 `cmd /c '…'` 包一层（此时空参数能正常传入，
+> argv 长度 2）。PowerShell 7.3+ 默认已修好这个行为。
+```
+
 ## 四、发布前必查清单
 
 - [ ] 版本号三处一致：`package.json` / `manifest.json` / `src/status.ts` 的 `PLUGIN_VERSION`（有测试锁）
