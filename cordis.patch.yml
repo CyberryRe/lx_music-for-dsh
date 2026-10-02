@@ -35,5 +35,10 @@
         # 旧版 single 布局存储 → per-record 的一次性迁移（默认 true；仅测试/嵌入方需要关掉）
         migrateLegacyDomain: true
         # 卸载插件时清理本机留下的数据（播放列表 / 画像 / 点歌日志 / 音源）。
-        # 延迟 + 可取消：DSH 升级插件同样是「卸载旧包 → 装新包」，不会误删。默认 true。
-        cleanupOnUninstall: true
+        #
+        # ⚠️ **必须保持 false**。这里曾经是 true，而 cordis 分不清「卸载插件」和
+        # 「升级 / 热重载」：升级时会先 dispose 旧实例，8 秒后延迟清理就把
+        # `$DSH_HOME/storages/lx_music/` 整个删掉 —— 用户每次升级插件都丢播放列表、
+        # 设置和音源（表现就是"重启/升级之后音源不见了"）。
+        # 删除用户数据必须由用户显式发起：设置 →「实验性」→「清理本机数据…」。
+        cleanupOnUninstall: false

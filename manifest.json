@@ -2,7 +2,7 @@
   "$schema": "./docs/manifest.schema.json",
   "id": "lx-music-for-dsh",
   "name": "LX Music for DSH",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "为 LX Music 提供增强控制界面与 LLM 交互能力：侧边栏迷你播放卡片（含播放模式切换）、搜索/播放列表主窗口、音源与音质策略设置窗口、细粒度音乐工具集（music_search/play/playlist/prev/next/control）、音乐画像（实验性，默认关闭；本地口味记忆 + 精确点播 music_profile/music_play_song/music_taste）与「我的口味」窗口。⚠️ 安装/更新后请**彻底退出并重启 DSH**（不是关窗口）才会加载新代码：已知问题，下个大版本修复",
   "author": "dsh",
   "license": "Apache-2.0",
@@ -22,12 +22,12 @@
     "config": "schemastery z.object，见 src/index.ts 的 Config"
   },
   "inject": {
-    "host": ["tools", "storageDomain"],
+    "host": ["tools"],
     "client": ["slots", "locale", "remote"]
   },
   "services": {
     "provided": ["lxPlayback (Typert Remote)"],
-    "consumed": ["tools", "storageDomain", "remote"]
+    "consumed": ["tools", "storageDomain（可选，作用域注入）", "remote"]
   },
   "tools": [
     {
@@ -87,7 +87,8 @@
     "autoPullHighestOnSwitch": "切歌时自动拉取最高音质",
     "fallbackStrategy": "失败降级策略",
     "rateLimitPerMinute": "LLM 点歌每分钟调用上限",
-    "migrateLegacyDomain": "1.2.0 一次性迁移开关（默认开）：把旧版 single 布局的 lx_music.json 迁到 per-record 布局"
+    "migrateLegacyDomain": "1.2.0 一次性迁移开关（默认开）：把旧版 single 布局的 lx_music.json 迁到 per-record 布局",
+    "cleanupOnUninstall": "卸载插件时是否删除本机数据（默认 false；升级/热重载同样会触发 dispose，开启会在升级后误删播放列表与音源）"
   },
   "install": {
     "method": "node scripts/install-to-dsh.mjs —— npm pack + `dsh plugin --profile web add <tgz>`；包声明 dsh.bundle.patch，作为 profile 组合层自动激活（dsh >= 0.1.5-rc.1）。详见 docs/development.md §6"

@@ -64,6 +64,16 @@ function rankQuality(q: Quality): number {
   return QUALITY_RANK[q] ?? 0
 }
 
+/**
+ * 直链缓存有效期。音乐直链普遍带签名过期（通常几十分钟），缓存太久会让二次播放
+ * 拿到死链；缓存太短则切歌时重复打音源脚本。5 分钟是"切歌/回退不重复解析"与
+ * "不复活过期直链"之间的折中。
+ */
+const URL_CACHE_TTL_MS = 5 * 60_000
+
+/** 直链缓存条目上限（超出按最旧淘汰），避免长时间会话无界增长。 */
+const URL_CACHE_MAX = 200
+
 /** 从歌曲支持的音质中选择目标音质。 */
 export function pickQuality(music: MusicInfo, settings: PluginSettings, explicit?: Quality): Quality {
   const supported = new Set((music.meta.qualitys ?? []).map((q) => q.type))
@@ -122,6 +132,8 @@ export interface PlaybackServiceOptions {
   taste?: TasteHooks
   /** 画像 UI/Remote 读写面。 */
   tasteUi?: TasteUiBridge
+  /** 持久化/引擎的告警出口（宿主 logger；不给则只打 console）。 */
+  onWarn?: (message: string, error?: unknown) => void
   now?: () => number
 }
 
@@ -136,10 +148,19 @@ export class PlaybackService extends TypertRemoteService {
   private readonly onLog?: (e: PlayLogEntry) => void
   private taste?: TasteHooks
   private tasteUi?: TasteUiBridge
+  private readonly onWarn?: (message: string, error?: unknown) => void
   readonly rateLimiter?: PlaybackServiceOptions['rateLimiter']
   private readonly now: () => number
   private persistTimer: ReturnType<typeof setTimeout> | null = null
-  private urlCache = new Map<string, MusicUrlResult>()
+  /**
+   * 直链缓存：key → `{ value, at }`。
+   *
+   * ⚠️ 必须有 TTL 与容量上限，不能是"一次会话内永久缓存"：
+   * 音乐 CDN 直链普遍带签名/过期时间（几十分钟），一个过期的直链会让**同一首歌**
+   * 二次播放时直接失败（客户端只能听到静音或直接跳到下一首）。TTL 之内重复解析
+   * 仍然命中缓存（切歌不会重复打音源脚本）。
+   */
+  private urlCache = new Map<string, { value: MusicUrlResult; at: number }>()
 
   constructor(ctx: Context, options: PlaybackServiceOptions = {}) {
     super(ctx, 'lxPlayback')
@@ -148,6 +169,7 @@ export class PlaybackService extends TypertRemoteService {
     this.onLog = options.onLog
     this.taste = options.taste
     this.tasteUi = options.tasteUi
+    this.onWarn = options.onWarn
     this.rateLimiter = options.rateLimiter
     this.now = options.now ?? Date.now
     this.settings = { ...DEFAULT_SETTINGS, ...options.settings }
@@ -183,13 +205,24 @@ export class PlaybackService extends TypertRemoteService {
     this.provider = this.buildProvider()
   }
 
+  /** 当前 provider 的音源持久化后端（诊断用：durable=storage domain；file=兜底文件；n/a=非内置引擎）。 */
+  providerStoreKind(): string {
+    const p = this.provider as { sourceStoreKind?: () => string }
+    return typeof p.sourceStoreKind === 'function' ? p.sourceStoreKind() : 'n/a'
+  }
+
   private buildProvider(): Provider {
+    const onStoreError = (message: string, error?: unknown): void => {
+      // 音源落盘失败必须显式告警：桌面版看不到 console，所以同时走宿主 logger
+      this.onWarn?.(`[lx-music] ${message}`, error)
+      if (this.onWarn === undefined) console.warn(`[lx-music] ${message}`, error)
+    }
     try {
-      return createProvider(this.settings, { storage: this.storage })
+      return createProvider(this.settings, { storage: this.storage, onStoreError })
     } catch (err) {
       // providerMode:lxserver 且无地址等配置错误 → 回退内置引擎并记录
       console.warn('[lxPlayback] provider 创建失败，回退内置引擎:', err instanceof Error ? err.message : err)
-      return createProvider({ lxServerUrl: '', providerMode: 'engine' }, { storage: this.storage })
+      return createProvider({ lxServerUrl: '', providerMode: 'engine' }, { storage: this.storage, onStoreError })
     }
   }
 
@@ -256,6 +289,18 @@ export class PlaybackService extends TypertRemoteService {
   attachStorage(storage: StorageFace): void {
     if (this.storage) return
     this.storage = storage
+    // ⚠️ 必须先重建 provider，且**不能**被下面的 return 跳过。
+    //
+    // provider 是在构造函数里建的，而 storageDomain 是**迟到**就绪的（作用域注入），
+    // 所以构造函数那一刻 `this.storage === undefined` → 内置引擎退化成
+    // FileSourceStore（`$DSH_HOME/storages/lx-music-sources.json`）。若此后不重建，
+    // 用户在设置窗口导入的音源会写进那个兜底文件、永远进不了 storage domain，
+    // 而读取侧（重启后的新实例）看到的仍是空的——表现为"加了音源，重启 DSH 就没了"。
+    if (this.provider.mode === 'engine') {
+      // 旧 provider 可能已经拉起了音源脚本子进程，重建前先释放，避免孤儿进程
+      this.disposeProvider()
+      this.refreshProvider()
+    }
     // 已经在放歌就不动状态（避免把刚点播的播放列表覆盖回旧的）
     if (this.state.status === 'playing' && this.state.current) return
     const persisted = this.loadPersisted()
@@ -564,7 +609,7 @@ export class PlaybackService extends TypertRemoteService {
     const music = req.music
     const explicitQuality = req.quality
     const cacheKey = `${music.id}|${explicitQuality ?? 'auto'}`
-    const cached = this.urlCache.get(cacheKey)
+    const cached = this.readUrlCache(cacheKey)
     if (cached) return jsonSafe(cached)
 
     const errors: string[] = []
@@ -577,7 +622,7 @@ export class PlaybackService extends TypertRemoteService {
     for (const quality of qualityChain) {
       try {
         const result = jsonSafe(await this.provider.resolveUrl(music, quality))
-        this.urlCache.set(cacheKey, result)
+        this.writeUrlCache(cacheKey, result)
         return result
       } catch (err) {
         errors.push(`${quality}: ${err instanceof Error ? err.message : String(err)}`)
@@ -598,7 +643,7 @@ export class PlaybackService extends TypertRemoteService {
           if (candidate) {
             const quality = this.qualityChainFor(candidate, explicitQuality)[0]!
             const result = jsonSafe(await this.provider.resolveUrl(candidate, quality))
-            this.urlCache.set(cacheKey, result)
+            this.writeUrlCache(cacheKey, result)
             return result
           }
         } catch (err) {
@@ -615,6 +660,29 @@ export class PlaybackService extends TypertRemoteService {
     err.attempts = errors.map((e) => ({ name: 'resolve', status: 'fail', message: e }))
     console.error(`[lx-music] resolveUrl 全部失败: ${message}`)
     throw err
+  }
+
+  /** 读直链缓存（过期即视为未命中并顺手丢弃）。 */
+  private readUrlCache(key: string): MusicUrlResult | undefined {
+    const hit = this.urlCache.get(key)
+    if (!hit) return undefined
+    if (this.now() - hit.at > URL_CACHE_TTL_MS) {
+      this.urlCache.delete(key)
+      return undefined
+    }
+    return hit.value
+  }
+
+  /** 写直链缓存；超容量时按插入顺序淘汰最旧条目（Map 保序）。 */
+  private writeUrlCache(key: string, value: MusicUrlResult): void {
+    // 先删后写：让这条成为"最新"，淘汰顺序才与新鲜度一致
+    this.urlCache.delete(key)
+    this.urlCache.set(key, { value, at: this.now() })
+    while (this.urlCache.size > URL_CACHE_MAX) {
+      const oldest = this.urlCache.keys().next()
+      if (oldest.done === true) break
+      this.urlCache.delete(oldest.value)
+    }
   }
 
   private qualityChainFor(music: MusicInfo, explicit?: Quality): Quality[] {

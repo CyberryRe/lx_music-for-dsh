@@ -82,6 +82,16 @@ export interface StoreSnapshot {
 const POLL_MS = 500
 const REPORT_MS = 1000
 
+/**
+ * 曲目身份键。**不能只用 `id`**：不同平台的同一首歌可能拿到相同 id，而音质变化
+ * （320k → flac）也必须是"需要重新解析直链"的变化。
+ * 同一个键 = 同一份流，切歌/换音质都会得到不同的键。
+ */
+function trackKey(music: MusicInfo | null | undefined, quality: string): string {
+  if (!music) return ''
+  return `${music.source}|${music.id}|${quality}`
+}
+
 export class LxStore {
   private remote: LxRemote
   private snapshot: StoreSnapshot = {
@@ -108,7 +118,32 @@ export class LxStore {
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private reportTimer: ReturnType<typeof setInterval> | null = null
   private lastReport = 0
-  private loadingTrack = false
+  /**
+   * 直链解析的**代数**：每次发起解析就 +1，异步结果回来时用它判断自己是否已经过期。
+   *
+   * 这是"我明明换了歌，播的还是上一首"的核心防线。旧实现用一个 `loadingTrack` 布尔把
+   * **新的**加载请求直接丢掉（`if (this.loadingTrack) return`），解析返回后又无条件写
+   * `audio.src` —— 于是新歌的加载被丢弃、旧歌的流被贴上去；又因为状态里已经是新歌，
+   * 下一轮轮询看不出"曲目变了"，就**永久卡在**"UI 是新歌、声音是旧歌"。
+   *
+   * 为什么用"代数"而不是"用当前曲目键去比对"：曲目键在**发起加载时就确定了**，
+   * 而写入 `audio.src` 要等 await 回来。若拿 `loadedKey`（=已写入的流）判断，
+   * 会出现"新目标已开始解析、但还没写入"的窗口：此时被抢占的旧加载回来会误判成
+   * "当前曲目还没加载"并再解析一次（同一首歌解析两遍，两次结果还会互相覆盖 —— 
+   * 实测表现为偶发多打一次音源脚本，最坏情况下第二次失败会把好好的那首跳掉）。
+   * 代数比较没有这个窗口：任何一次异步结果，只要不是最新那次，就一律丢弃。
+   */
+  private loadGen = 0
+  /** 最新一次解析的 promise（`void this.loadTrack()` 的产物，供测试与错误处理观察）。 */
+  private pending: Promise<void> | null = null
+  /** 最近一次**成功写入** `audio.src` 的曲目键（同一份流不重复解析：paused→playing 不重解析）。 */
+  private loadedKey = ''
+  /** 最近一次**解析失败**的曲目键：同一首不再自动重试，避免每轮 500ms 轮询都打一遍音源脚本。 */
+  private failedKey = ''
+  /** 每个曲目键已发生的音频错误次数（用于"重解析一次再不成功就跳歌"）。 */
+  private errorRetry = new Map<string, number>()
+  /** 错误重试表的容量上限（超过按最旧淘汰，避免长时间会话无界增长）。 */
+  private static readonly ERROR_RETRY_MAX = 200
   private started = false
 
   constructor(remote: LxRemote) {
@@ -180,15 +215,10 @@ export class LxStore {
         this.remote.getSettings(),
         this.remote.listSources(),
       ])
-      const trackChanged = state.current?.id !== this.snapshot.state?.current?.id
       const versionChanged = state.version !== this.lastVersion
       this.patch({ state, settings, sources, connected: true, error: null })
       this.lastVersion = state.version
-      if (versionChanged && trackChanged) {
-        void this.loadTrack(state)
-      } else if (versionChanged) {
-        this.applyStatus(state.status)
-      }
+      if (versionChanged) this.syncState(state)
       void this.refreshTaste()
     } catch (err) {
       this.patch({ connected: false, error: err instanceof Error ? err.message : String(err) })
@@ -217,32 +247,54 @@ export class LxStore {
   private async sync(): Promise<void> {
     try {
       const state = await this.remote.getState()
-      const trackChanged = state.current?.id !== this.snapshot.state?.current?.id
       const versionChanged = state.version !== this.lastVersion
       if (!versionChanged) return
       this.lastVersion = state.version
       this.patch({ state, connected: true, error: null })
-      if (trackChanged) {
-        void this.loadTrack(state)
-      } else {
-        this.applyStatus(state.status)
-        this.emit()
-      }
+      this.syncState(state)
     } catch {
       // 轮询失败静默，避免日志刷屏
     }
   }
 
-  /** 加载当前曲目并（按状态）播放。 */
+  /**
+   * 解析当前曲目的直链并写入 `audio`。
+   *
+   * 三条不变量（每条都对应一个真实踩过的坑）：
+   *   1. **只有最新一次解析能落地**：结果回来先比 `loadGen`，不是最新就整段丢弃 ——
+   *      这杜绝了"换了歌，播的还是上一首"；
+   *   2. **过期请求不产生副作用**：过期结果既不写 `audio.src`、也不报错、也不跳歌
+   *      （旧实现里，被抢占的那次失败会把新歌误判成坏歌直接 `next()`）；
+   *   3. **失败要记账**：把曲目键记进 `failedKey`，避免每轮 500ms 轮询都重试同一首。
+   *
+   * 这个方法**可以并发重入**：`loadGen` 保证后发者胜出，先发者的结果被丢弃。
+   */
   private async loadTrack(state: PlayerState): Promise<void> {
+    const requested = trackKey(state.current, state.quality)
     const music = state.current
+    this.loadGen += 1
+    const gen = this.loadGen
+    // ⚠️ 必须 await **自己这一次**的 promise，不能 await `this.pending`：
+    // 并发切歌时 `this.pending` 早已被后一次加载覆盖，await 它会变成"等最新那次"——
+    // 于是先发起的那次永远不返回（实测把测试套件整个挂死）。
+    const run = this.runLoad(gen, requested, state, music)
+    this.pending = run
+    await run
+  }
+
+  private async runLoad(gen: number, requested: string, state: PlayerState, music: MusicInfo | null): Promise<void> {
     if (!music) return
-    if (this.loadingTrack) return
-    this.loadingTrack = true
     this.patch({ loading: true, error: null })
     try {
       const resolved = await this.remote.resolveUrl({ music, quality: state.quality })
+      // 不变量 1/2：已经被更新的加载取代 → 丢弃（不写 src、不动状态）
+      if (gen !== this.loadGen) return
       if (!this.audio) return
+      this.loadedKey = requested
+      this.failedKey = ''
+      // 这份流已经拿到并落地 → 清掉该曲目的错误重试计数，
+      // 否则"一首歌曾经失败过一次"会永久占用它的重试预算（再次播放时直接跳歌）。
+      this.errorRetry.delete(requested)
       this.audio.src = resolved.url
       this.audio.volume = state.mute ? 0 : state.volume
       if (state.status === 'playing') {
@@ -250,14 +302,47 @@ export class LxStore {
       }
       this.patch({ loading: false })
     } catch (err) {
+      // 过期请求的失败与当前播放无关，必须完全静默（旧实现会因此跳掉正在播的歌）
+      if (gen !== this.loadGen) return
       const message = err instanceof Error ? err.message : String(err)
       // 直链解析失败：完整错误打到浏览器 console（含各音源脚本错误与最近 HTTP 状态码），便于诊断
       console.error('[lx-music] 直链解析失败:', message, err instanceof Error ? err : undefined)
+      this.loadedKey = requested
+      this.failedKey = requested
       this.patch({ loading: false, error: message })
       // 自动切下一首（跳过坏歌）
       void this.remote.next().catch(() => undefined)
-    } finally {
-      this.loadingTrack = false
+    }
+  }
+
+  /** 状态同步入口：需要"换到另一份流"才重新解析直链，否则只跟随播放/暂停。 */
+  private syncState(state: PlayerState): void {
+    const requested = trackKey(state.current, state.quality)
+    // 同一份流不重复解析；刚失败过的那首也不自动重试（等 host 切歌或用户再点一次）
+    const needsStream = requested !== '' && requested !== this.loadedKey && requested !== this.failedKey
+    if (needsStream) {
+      void this.loadTrack(state)
+      return
+    }
+    this.applyStatus(state.status)
+  }
+
+  /**
+   * 等当前在飞的直链解析收尾（**测试与诊断用**，生产代码不依赖它）。
+   *
+   * 存在的理由：`loadTrack` 在生产里是 `void` 调起的，外部没有"已稳定"的信号，
+   * 于是测试只能靠 `setTimeout` 猜 tick 数 —— 那是构造性竞态（第一版测试就是这么假失败的）。
+   *
+   * ⚠️ 有界：最多等 10 轮。**绝不能**写成"`await this.pending` 直到它变 null"——
+   * 若某次解析的 promise 永不 settle（取消、脚本卡死），那种写法会把调用方一起挂死，
+   * 而不是让测试失败。（这正是第一版实现把整条测试流水线挂住的原因。）
+   */
+  async settleLoaded(): Promise<void> {
+    for (let i = 0; i < 10; i++) {
+      const current = this.pending
+      if (current === null) return
+      await Promise.race([current.catch(() => undefined), new Promise((r) => setTimeout(r, 50))])
+      if (this.pending === current) return
     }
   }
 
@@ -318,12 +403,35 @@ export class LxStore {
     void this.remote.next().catch(() => undefined)
   }
 
+  /**
+   * 音频元素报错：直链多半已经失效（签名过期/防盗链/网络抖动）。
+   *
+   * 旧实现只贴一条提示并且**什么都不做**，于是"拉到坏流"就等于卡住——用户看到的是
+   * "这首歌播不出来，也不自动往下走"。现在按曲目键处理：同一首最多重解析一次，再失败就跳下一首。
+   */
   private onAudioError = (): void => {
     const st = this.snapshot.state
-    if (st?.current) {
-      this.patch({ error: '音频播放失败，正在尝试下一首…' })
-      void this.remote.reportProgress({ progress: 0, duration: st.duration, status: 'error' })
+    if (!st?.current) return
+    const key = trackKey(st.current, st.quality)
+    const attempt = (this.errorRetry.get(key) ?? 0) + 1
+    this.errorRetry.set(key, attempt)
+    while (this.errorRetry.size > LxStore.ERROR_RETRY_MAX) {
+      const oldest = this.errorRetry.keys().next()
+      if (oldest.done === true) break
+      this.errorRetry.delete(oldest.value)
     }
+    void this.remote.reportProgress({ progress: 0, duration: st.duration, status: 'error' })
+    if (attempt === 1 && this.pending === null) {
+      // 让 syncState 认为"这份流还没就绪" → 重新解析一次（新直链通常就正常了）。
+      // 同时清掉 failedKey：这是一次**用户可感知的播放失败**，值得重试一次；
+      // 而 syncState 里对 failedKey 的去重是为了挡住"解析失败后每 500ms 重试"。
+      this.failedKey = ''
+      this.patch({ error: '音频流失效，正在重新解析…' })
+      this.syncState(st)
+      return
+    }
+    this.patch({ error: '音频播放失败，正在尝试下一首…' })
+    void this.remote.next().catch(() => undefined)
   }
 
   private reportProgress(): void {
@@ -593,13 +701,8 @@ export class LxStore {
   }
 
   private applyState(st: PlayerState): void {
-    const trackChanged = st.current?.id !== this.snapshot.state?.current?.id
     this.lastVersion = st.version
     this.patch({ state: st, connected: true, error: null })
-    if (trackChanged) {
-      void this.loadTrack(st)
-    } else {
-      this.applyStatus(st.status)
-    }
+    this.syncState(st)
   }
 }

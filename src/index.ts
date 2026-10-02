@@ -57,9 +57,10 @@ export const Config = z.object({
   // 一次性把旧版 single 布局的数据迁到 per-record（默认开）。
   // 关闭仅用于测试/嵌入方，避免在用户真实 $DSH_HOME 上产生写盘副作用。
   migrateLegacyDomain: z.boolean().default(true),
-  // 卸载插件时清理本机留下的数据（播放列表 / 画像 / 点歌日志 / 音源）：
-  // 延迟 + 可取消，升级触发的卸载不会误删（见 storage/cleanup.ts）。
-  cleanupOnUninstall: z.boolean().default(true),
+  // 卸载插件时清理本机留下的数据（播放列表 / 画像 / 点歌日志 / 音源）。
+  // **默认 false**：cordis 分不清「退出应用」与「卸载插件」，自动删除可能在慢退出时误删用户数据；
+  // 显式开启后是「延迟 30s + 期间重新激活即取消」（见 storage/cleanup.ts）。
+  cleanupOnUninstall: z.boolean().default(false),
 })
 
 const qualityEnum = zod.enum(['128k', '320k', 'flac', 'flac24bit', 'flac32bit', 'wav'])
@@ -176,6 +177,28 @@ export async function apply(ctx: Parameters<typeof applyInner>[0], rawConfig: Re
   }
 }
 
+// 进程级共享的存储句柄与进行中的 open。
+// 为什么是模块级：同一次进程里 `apply` 可能跑多次，而 storage domain **同名只能打开一次**
+// （第二次 open 抛 `domain 'lx_music' is already open`）；不复用就会整场降级为内存模式，
+// 表现为"重启 DSH 后刚导入的音源不见了"。
+let processStorage: StorageFace | undefined
+let openingStorage: Promise<StorageFace | undefined> | undefined
+
+/**
+ * 清掉进程级存储句柄（**仅测试用**，以及需要重新绑定另一个 storageDomain 的嵌入方）。
+ *
+ * 为什么需要这个缝：`processStorage` 是进程级单例，所以同一进程里第二次 `apply` 会**复用**
+ * 第一次打开的 domain（这是刻意的——重复 `open` 会抛 `already open`）。但这也意味着
+ * "第二次 apply 的 storageDomain 是被忽略的"：如果它其实指向另一份存储（测试里的假 domain、
+ * 或嵌入方换绑），写进去的数据会落到第一份上。
+ * 单测在同一进程里连续 `apply` 多次，必须能显式重置，否则会串味（tests/host.integration.test.ts
+ * 实测：第二个用例的假 domain 永远收不到日志）。
+ */
+export function resetProcessStorageForTests(): void {
+  processStorage = undefined
+  openingStorage = undefined
+}
+
 async function applyInner(ctx: {
   tools: { register(tool: unknown): void }
   /** 可选注入钩子：storage/skill 服务都可能不存在，**只能**用它拿（不能直接读 ctx.xxx）。 */
@@ -200,8 +223,12 @@ async function applyInner(ctx: {
   const logger = ctx.logger ?? console
   // 迁移开关：默认开；只有显式 false / 'false' 才关闭（YAML 行配置可能给字符串）
   const migrateLegacy = !(rawConfig.migrateLegacyDomain === false || rawConfig.migrateLegacyDomain === 'false')
-  // 卸载清理开关：默认开（用户可在设置里关掉）
-  const cleanupOnUninstall = !(rawConfig.cleanupOnUninstall === false || rawConfig.cleanupOnUninstall === 'false')
+  // 卸载清理开关：**默认关**（显式开启才生效）。
+  // 原因：正常退出 DSH 同样会触发 dispose，而「退出」与「卸载」在 cordis 里不可区分；
+  // 只要有慢退出（超过延迟）就可能把用户数据整个删掉。所以默认不动用户数据；
+  // 需要「卸载即清理」的人显式写 cleanupOnUninstall: true，
+  // 想立刻清理随时可用「设置 → 实验性 → 清理本机数据」。
+  const cleanupOnUninstall = rawConfig.cleanupOnUninstall === true || rawConfig.cleanupOnUninstall === 'true'
 
   // 限流器（LLM 点歌防刷）
   const rateLimiter = new SlidingWindowRateLimiter({
@@ -285,9 +312,11 @@ async function applyInner(ctx: {
   }
 
   // 播放服务（Typert Remote：lxPlayback）。**不依赖存储**：先注册，存储就绪后再 attach。
+  // onWarn 走宿主 logger（桌面版没有终端，console 输出看不到）。
   const service = new PlaybackService(ctx as never, {
     settings,
     rateLimiter,
+    onWarn: (message, error) => logger.warn(message, error),
     onSettingsChange: (s) => {
       // rateLimitPerMinute 变更 → 重建限流器
       if (s.rateLimitPerMinute !== settings.rateLimitPerMinute) {
@@ -308,8 +337,29 @@ async function applyInner(ctx: {
    * 迁移顺序：**先读旧数据 → 旧文件改名搁置 → 打开 → 显式迁移**。
    * 为什么不能只靠 backend 的 legacy bootstrap：它只用旧文件的原始键当文件名（Windows 上
    * ISO 时间戳里的冒号非法 → ENOENT → 整个 open 失败，插件静默退化成内存），而且不带 global。
+   *
+   * ⚠️ **进程级复用**：同一次进程里 `apply` 可能被调用多次（热重载 / 多行加载 / 上一次的 fiber
+   * 还没释放），第二次再 `open` 会以
+   * `DomainError: domain 'lx_music' is already open` 失败 → 整场降级为内存模式 →
+   * 用户看到的是"刚导入的音源重启后不见了"（1.2.2 实测事故）。
+   * 所以：能复用就复用同一个 StorageFace；真的撞上 already open 也有界重试。
    */
   const openStorage = async (domain: { open(spec: unknown): Promise<unknown> }): Promise<boolean> => {
+    // 1) 本进程已经开好 → 直接复用（不重复 open、不重复迁移）
+    if (processStorage) {
+      storage = processStorage
+      recordStatus({ phase: 'storage-ready', storage: 'durable', domain: '复用本进程已打开的 domain' })
+      return true
+    }
+    // 2) 另一个 apply 正在开 → 等它（并发去重）
+    if (openingStorage) {
+      const shared = await openingStorage
+      if (shared) {
+        storage = shared
+        recordStatus({ phase: 'storage-ready', storage: 'durable', domain: '等待并发 open 后复用' })
+        return true
+      }
+    }
     const legacyPath = defaultDomainFile()
     const legacy = readLegacyWholeUnit(legacyPath)
     const needsMigration = migrateLegacy && needsLegacyMigration(domainSpec.name)
@@ -325,8 +375,30 @@ async function applyInner(ctx: {
       console.info(msg)
     }
     try {
-      const opened = (await domain.open(domainSpec)) as Parameters<typeof adaptDomain>[0]
+      // 有界重试：撞上 "already open" 时给旧 fiber 一点释放时间（常见于重启/热重载）
+      let opened: Parameters<typeof adaptDomain>[0] | undefined
+      let lastError: unknown
+      const attempt = async (): Promise<void> => {
+        for (let i = 1; i <= 4; i++) {
+          try {
+            opened = (await domain.open(domainSpec)) as Parameters<typeof adaptDomain>[0]
+            return
+          } catch (err) {
+            lastError = err
+            const message = err instanceof Error ? err.message : String(err)
+            if (!/already open/i.test(message) || i === 4) throw err
+            logger.warn(`[lx-music-for-dsh] storage domain 已被占用，${i * 300}ms 后重试（第 ${i} 次）：${message}`)
+            await new Promise((r) => setTimeout(r, i * 300))
+          }
+        }
+      }
+      const opening = attempt()
+      openingStorage = opening.then(() => processStorage ?? undefined)
+      await opening
+      openingStorage = undefined
+      if (!opened) throw lastError ?? new Error('domain 打开失败')
       const store = adaptDomain(opened)
+      processStorage = store
       let migrationInfo = '无旧数据'
       if (migrateLegacy && legacy) {
         const result = await migrateLegacyDomain({
@@ -403,10 +475,14 @@ async function applyInner(ctx: {
       .then((ok) => {
         if (!ok || !storage) return
         attachStorageAndTaste()
-        const status = `[lx-music-for-dsh] 存储已就绪，provider: ${service.getProviderMode()}，工具: ${toolNames.length}`
+        // 音源持久化后端必须能被确认：durable=storage domain（重启不丢），
+        // file=兜底文件。历史事故（provider 早于 storage 建好、之后没重建）会让音源
+        // 只进兜底文件，这里把它变成一行可核对的记录。
+        const storeKind = service.providerStoreKind()
+        const status = `[lx-music-for-dsh] 存储已就绪，provider: ${service.getProviderMode()}（音源存储: ${storeKind}），工具: ${toolNames.length}`
         logger.warn(status)
         console.info(status)
-        recordStatus({ phase: 'ready', storage: 'durable', domain: '已挂载存储与画像', tools: toolNames })
+        recordStatus({ phase: 'ready', storage: 'durable', domain: '已挂载存储与画像', sourceStore: storeKind, tools: toolNames })
       })
       .catch((err) => {
         logger.warn('[lx-music-for-dsh] 存储挂载失败，继续以内存模式运行:', err)
@@ -472,8 +548,8 @@ async function applyInner(ctx: {
   // ctx.logger 的去向由宿主决定（可能被日志级别过滤），启动行同时写 stdout，
   // 便于按 docs/development.md §4.1 在启动 dsh 的终端直接确认插件是否加载。
   const tasteState = !tasteStore ? '未挂载' : memory.enabled ? '开' : '关（实验性功能默认关闭）'
-  const status = `[lx-music-for-dsh] 插件已加载，provider: ${service.getProviderMode()}，storage: ${storage ? 'durable' : 'pending/memory'}，画像: ${tasteState}，工具: ${toolNames.length}`
+  const status = `[lx-music-for-dsh] 插件已加载，provider: ${service.getProviderMode()}（音源存储: ${service.providerStoreKind()}），storage: ${storage ? 'durable' : 'pending/memory'}，画像: ${tasteState}，工具: ${toolNames.length}`
   logger.warn(status)
   console.info(status)
-  recordStatus({ phase: 'ready', storage: storage ? 'durable' : 'memory', tools: toolNames })
+  recordStatus({ phase: 'ready', storage: storage ? 'durable' : 'memory', sourceStore: service.providerStoreKind(), tools: toolNames })
 }

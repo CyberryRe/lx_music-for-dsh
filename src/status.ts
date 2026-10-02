@@ -16,7 +16,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 /** 插件版本：必须与 package.json 一致（tests/activation.test.ts 锁住）。 */
-export const PLUGIN_VERSION = '1.2.2'
+export const PLUGIN_VERSION = '1.2.3'
 
 /** 状态文件里的一次激活记录（同一进程内多次调用会保留历史，便于观察重试/热重载）。 */
 export interface PluginStatusRecord {
@@ -35,6 +35,12 @@ export interface PluginStatusRecord {
   migration?: string
   /** 已注册的工具名（分两批：music_* 与画像工具）。 */
   tools?: string[]
+  /**
+   * 音源落盘后端：domain=storage domain（重启不丢）；file=兜底文件
+   * （`$DSH_HOME/storages/lx-music-sources.json`）；memory=不落盘。
+   * 用于排查"加了音源、重启后不见了"。
+   */
+  sourceStore?: string
   /** 失败原因（含栈）。 */
   error?: string
 }

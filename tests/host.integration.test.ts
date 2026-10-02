@@ -3,8 +3,22 @@
 
 import { describe, expect, it } from './mini'
 import { Context } from '@deepseek-ai/cordis'
-import { apply, domainSpec } from '../src/index'
+import { apply, domainSpec, resetProcessStorageForTests } from '../src/index'
 import type { MusicInfo, PlayerState, PluginSettings } from '../src/shared/types'
+
+/**
+ * 每个用例用独立的进程级存储句柄。
+ *
+ * 为什么必须：`processStorage` 是**进程级单例**——同进程第二次 `open` 会抛
+ * `domain 'lx_music' is already open`，所以插件刻意复用第一次打开的 domain（见 src/index.ts）。
+ * 但本文件每个用例都 `apply` 一次、各自带一个假 domain：不重置的话，第二个用例起的 `apply`
+ * 会复用第一个用例的 domain，**它自己的 `domain.tables` 永远是空的**
+ * （实测表现：「关闭时不写日志」通过、「开启后才写」失败，而单独跑该用例时反而通过）。
+ * 这是用例间的串味，不是插件逻辑问题——真实运行里一个进程只有一个 storageDomain。
+ */
+function freshStorageSingleton(): void {
+  resetProcessStorageForTests()
+}
 
 interface ToolLike {
   name: string
@@ -120,6 +134,7 @@ describe('host 集成（apply 全流程）', () => {
     const tools: ToolLike[] = []
     ctx.tools = { register: (t) => tools.push(t as ToolLike) }
     ctx.logger = console
+    freshStorageSingleton()
     const domain = fakeStorageDomain()
     provideStorageDomain(ctx as unknown as Record<string, unknown>, domain)
 
@@ -151,6 +166,7 @@ describe('host 集成（apply 全流程）', () => {
     }
     const tools: ToolLike[] = []
     ctx.tools = { register: (t) => tools.push(t as ToolLike) }
+    freshStorageSingleton()
     provideStorageDomain(ctx as unknown as Record<string, unknown>, fakeStorageDomain())
     ctx.logger = console
     await apply(ctx, { providerMode: 'mock', rateLimitPerMinute: 2, migrateLegacyDomain: false })
@@ -189,6 +205,7 @@ describe('host 集成（apply 全流程）', () => {
     const tools: ToolLike[] = []
     ctx.tools = { register: (t) => tools.push(t as ToolLike) }
     ctx.logger = console
+    freshStorageSingleton()
     await apply(ctx, { providerMode: 'mock', migrateLegacyDomain: false })
     const svc = ctx.lxPlayback!
     svc.addMusic([{ id: 'x', name: 'X', singer: 'Y', source: 'wy', interval: '01:00', meta: { songId: 'x' } }], 'tail')

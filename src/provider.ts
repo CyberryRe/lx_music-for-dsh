@@ -168,10 +168,14 @@ export function migrateMockMode(value: unknown): ProviderMode {
 }
 
 /** 按设置选择 provider。 */
-export function createProvider(settings: ProviderSelection, deps: { storage?: StorageFace } = {}): Provider {
+export function createProvider(
+  settings: ProviderSelection,
+  deps: { storage?: StorageFace; onStoreError?: (message: string, error: unknown) => void } = {},
+): Provider {
   const mode = migrateMockMode(settings.providerMode)
   // 运行入口（唯一）：storage domain 可用时顺带做一次旧文件存储合并迁移。
-  const engine = (): Provider => new EngineProvider({ storage: deps.storage, migrateLegacySourceFile: true })
+  const engine = (): Provider =>
+    new EngineProvider({ storage: deps.storage, migrateLegacySourceFile: true, onStoreError: deps.onStoreError })
   if (mode === 'engine') return engine()
   if (mode === 'mock') return new MockSourceFacade(new MockProvider())
   if (mode === 'lxserver') {

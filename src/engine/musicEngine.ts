@@ -36,6 +36,11 @@ export interface EngineOptions {
   /** 音源持久化文件路径（不依赖 storage domain 时使用）。 */
   sourceFile?: string
   /**
+   * 持久化写失败回调（诊断用）。不提供时静默——但**不再吞掉错误**：
+   * `put()` 仍会把失败抛给调用方，由 `uploadSource` 转成 `{success:false}` 回给 UI。
+   */
+  onStoreError?: (message: string, error: unknown) => void
+  /**
    * storage domain 可用时，是否把旧文件存储（`$DSH_HOME/storages/lx-music-sources.json`）
    * 一次性合并进 domain。默认关闭：这是**会写盘（含改名）**的迁移，只有真正的运行入口
    * （provider.ts 的 createProvider）才应打开；测试与嵌入方默认不触碰用户真实数据。
@@ -54,20 +59,44 @@ export class EngineProvider implements Provider {
   readonly mode = 'engine' as const
   private readonly store: SourceStoreFace
   private readonly scripts = new Map<string, LoadedSourceScript>()
+  private readonly onStoreError?: (message: string, error: unknown) => void
 
   constructor(options: EngineOptions = {}) {
     // 持久化优先级：显式文件 → storage domain → 默认文件（保证音源重启不丢）
     // migrateLegacySourceFile 由运行入口显式打开：1.0.0 的 domain schema 有缺陷导致
     // storage 一直降级到该文件，domain 里留下的是更旧的音源快照，需要一次性合并回来。
     // 默认关闭，避免测试/嵌入方在用户真实 $DSH_HOME 上产生写盘副作用。
+    //
+    // ⚠️ 这里的分支选择依赖构造时的 `options.storage`。PlaybackService 的 provider 是**迟到**
+    // 建 storage 的（storageDomain 走作用域注入），所以 `attachStorage()` 必须重建 provider，
+    // 否则会静默落到 FileSourceStore（见 playback.ts attachStorage 的注释）。
+    const storeOptions = { onError: options.onStoreError }
+    this.onStoreError = options.onStoreError
     this.store = options.sourceFile
-      ? new FileSourceStore(options.sourceFile)
+      ? new FileSourceStore(options.sourceFile, storeOptions)
       : options.storage
         ? new DomainSourceStore(options.storage as never, {
+            ...storeOptions,
             legacyFile: options.migrateLegacySourceFile === true ? defaultSourceFile() : undefined,
           })
-        : new FileSourceStore(defaultSourceFile())
+        : new FileSourceStore(defaultSourceFile(), storeOptions)
     void this.reload()
+  }
+
+  /** 音源持久化后端种类（诊断：domain=storage domain，file=兜底文件，memory=不落盘）。 */
+  sourceStoreKind(): string {
+    return this.store.kind()
+  }
+
+  /** 音源是否写到"重启后还在"的持久层。 */
+  isDurable(): boolean {
+    return this.store.isDurable()
+  }
+
+  /** 非致命持久化失败的统一出口（走宿主 logger，桌面版 console 看不到）。 */
+  private reportStoreError(message: string, error: unknown): void {
+    this.onStoreError?.(`[lx-music] ${message}`, error)
+    if (this.onStoreError === undefined) console.warn(`[lx-music] ${message}`, error)
   }
 
   // ── 脚本生命周期 ──────────────────────────────────────────────────────────
@@ -91,7 +120,11 @@ export class EngineProvider implements Provider {
           }
         } catch (err) {
           record.lastError = err instanceof Error ? err.message : String(err)
-          await this.store.put(record).catch(() => undefined)
+          // 记录"这个音源坏了"。写不进去只告警：reload 是启动路径，不能因为持久层抖动
+          // 就让整个 provider 构造失败（那会连搜索都用不了）。
+          await this.store.put(record).catch((writeErr: unknown) => {
+            this.reportStoreError(`音源「${record.name}」的 lastError 写回失败`, writeErr)
+          })
         }
       }),
     )
@@ -266,7 +299,11 @@ export class EngineProvider implements Provider {
         this.scripts.delete(id)
         record.enabled = false
         record.lastError = err instanceof Error ? err.message : String(err)
-        await this.store.put(record).catch(() => undefined)
+        // 回滚写失败必须告警：否则 domain 里仍是 enabled=true，重启后这个坏音源
+        // 会"自己重新启用"（内存已回滚、持久层没有 → 两边不一致）。
+        await this.store.put(record).catch((writeErr: unknown) => {
+          this.reportStoreError(`音源「${record.name}」启用失败后的回滚写入失败（重启后可能仍是启用状态）`, writeErr)
+        })
         return { success: false, error: record.lastError }
       }
     }
