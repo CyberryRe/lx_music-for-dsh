@@ -30,10 +30,6 @@ export interface HttpFetchResult {
 
 const DEFAULT_TIMEOUT = 15_000
 
-function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null
-}
-
 function urlencodeForm(data: Record<string, unknown>): string {
   return Object.entries(data)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(typeof v === 'string' ? v : JSON.stringify(v))}`)
@@ -75,6 +71,10 @@ export function httpFetch(url: string, options: HttpFetchOptions = {}): { promis
           try {
             if (encoding === 'gzip') raw = zlib.gunzipSync(raw)
             else if (encoding === 'deflate') raw = zlib.inflateSync(raw)
+            // Brotli：网易云（interface*.music.163.com / music.163.com）现在默认回 br。
+            // 之前只处理 gzip/deflate，导致 body 变成乱码二进制串、JSON.parse 失败后
+            // 被当成字符串返回，上层看到的是"code 不是 200"这种误导性错误。
+            else if (encoding === 'br') raw = zlib.brotliDecompressSync(raw)
           } catch {
             // 解压失败时保留原始内容
           }
@@ -116,6 +116,3 @@ export function httpFetch(url: string, options: HttpFetchOptions = {}): { promis
     },
   }
 }
-
-/** 兼容原 SDK 的简单对象判断导出。 */
-export { isObject }

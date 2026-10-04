@@ -141,8 +141,120 @@ describe('实验性功能的红色警示（画像默认关闭）', () => {
   })
 })
 
-describe('「我的口味」窗口的按钮用法', () => {
-  /** 读取源码（测试跑在 .test-dist/tests 下，源码仍在仓库里）。 */
+// 1.3.0 之后的卡片布局调整（本轮需求）：
+//   ① 歌词入口**先隐藏**，但歌词链路（store.openLyrics / LyricsWindow / WindowsHost）必须完整保留；
+//   ② 音量从"常驻一行滑块"改成"点喇叭弹出"。
+// 这两条都是刻意的产品决策，容易被后来的改动顺手"改回去"，所以在这里钉住。
+describe('侧边栏卡片：歌词入口隐藏 + 音量改为点击喇叭弹出', () => {
+  const card = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'Card.tsx'), 'utf8')
+
+  it('卡片上不再有歌词按钮（隐藏入口），但歌词逻辑一处不少', () => {
+    // 入口没了：不能有「词」按钮，也不能再调起歌词窗口
+    expect(card).not.toContain('滚动歌词')
+    expect(card).not.toContain('store.openLyrics()')
+
+    // 逻辑保留：store 的歌词 API、歌词窗口、窗口挂载点都还在
+    const store = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'store.ts'), 'utf8')
+    expect(store).toContain('openLyrics(): void')
+    expect(store).toContain('closeLyrics(): void')
+    const host = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'WindowsHost.tsx'), 'utf8')
+    expect(host).toContain('LxLyricsWindow')
+    expect(host).toContain('snapshot.lyricsOpen')
+  })
+
+  it('音量滑块不在卡片里常驻，只在 volumeOpen 时渲染', () => {
+    // 旧实现是常驻的 .lxm-volume 行（滑杆永远可见）
+    expect(card).not.toContain('className="lxm-volume"')
+    // 卡片不再自己画面板：交给 VolumePopover（open 受控）
+    expect(card).toContain('<VolumePopover')
+    expect(card).toMatch(/open=\{volumeOpen\}/)
+    expect(card).toContain('setVolumeOpen((v) => !v)')
+    // 卡片自己不能再直接写 popover 标记（那意味着面板又回到了卡片里 → 会被裁断）
+    expect(card).not.toContain('lxm-volume-pop')
+    expect(card).not.toContain('aria-valuetext')
+  })
+
+  it('音量交互约定不变：拖动本地预览、抬手提交', () => {
+    // 卡片只负责把回调交给 VolumePopover（回调保持稳定引用）
+    expect(card).toContain('onPreview={previewVolume}')
+    expect(card).toContain('onCommit={commitVolume}')
+    const pop = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'VolumePopover.tsx'), 'utf8')
+    // 拖动中只 preview、抬手才 commit：本地预览必须来自 input 事件里的 dragging 分支
+    expect(pop).toContain('onPreview(valueOf())')
+    expect(pop).toContain('onCommit(valueOf())')
+    expect(pop).toContain('draggingRef.current')
+  })
+
+  it('弹层不能被卡片裁断：手写 DOM portal 到 body + fixed 定位', () => {
+    const pop = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'VolumePopover.tsx'), 'utf8')
+    // 根因：`.lxm-card` 有 overflow:hidden，留在卡片内的面板必然被裁掉
+    expect(pop).toContain('document.body.appendChild(panel)')
+    // 手写 portal 必须自己回收（React 不会帮忙）
+    expect(pop).toContain('panel.remove()')
+    // 也不能依赖 react-dom：本插件只依赖 react（契约是"无新增运行时依赖"）
+    expect(pop).not.toContain("from 'react-dom'")
+    const body = ruleBody(CSS, '.lxm-volume-pop') ?? ''
+    expect(/position:\s*fixed/.test(body)).toBe(true)
+    // fixed 元素必须自己保证层级足够高（要盖过卡片与列表弹层 10001）
+    expect(/z-index:\s*\d+/.test(body)).toBe(true)
+    const z = Number(/z-index:\s*(\d+)/.exec(body)?.[1] ?? '0')
+    expect(z).toBeGreaterThan(10001)
+  })
+
+  it('面板会跟随按钮定位、并夹在视口内（含上方放不下时翻到下面）', () => {
+    const pop = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'VolumePopover.tsx'), 'utf8')
+    expect(pop).toContain('getBoundingClientRect()')
+    // 夹到视口内：侧边栏很窄，不能把面板推出屏幕
+    expect(pop).toMatch(/Math\.min\(vw - anchor\.right/)
+    // 上方空间不足时翻到按钮下方
+    expect(pop).toContain('spaceAbove')
+    expect(pop).toContain('spaceBelow')
+    // 翻面状态写进 DOM（dataset.flip → CSS 的 [data-flip="true"] 决定箭头朝上还是朝下）
+    expect(pop).toContain('dataset.flip')
+    expect(CSS).toContain('.lxm-volume-pop[data-flip="true"]')
+    // 滚动/缩放后要重新量，否则面板会与按钮脱节
+    expect(pop).toContain("addEventListener('scroll'")
+    expect(pop).toContain("addEventListener('resize'")
+    // Esc 可关（键盘可达性）
+    expect(pop).toContain("e.key === 'Escape'")
+  })
+
+  it('二级面板只有一根竖滑块：不显示数值、也没有喇叭按钮', () => {
+    const pop = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'VolumePopover.tsx'), 'utf8')
+    // 竖的：writing-mode 是标准做法；direction: rtl 保证「上端 = 100%」。
+    // 取 .lxm-volume-pop 之后的那段 CSS（progress 选择器更早出现，不能直接 indexOf range）
+    const slider = CSS.slice(CSS.indexOf('.lxm-volume-pop'))
+    expect(/writing-mode:\s*vertical-lr/.test(slider)).toBe(true)
+    expect(/direction:\s*rtl/.test(slider)).toBe(true)
+    // 面板里只有 <input>：没有数值文本、也没有静音按钮
+    expect(pop).not.toContain('lxm-volume-head')
+    expect(pop).not.toContain('lxm-volume-value')
+    expect(pop).not.toContain('toggleMute')
+    expect(ruleBody(CSS, '.lxm-volume-head')).toBeUndefined()
+    expect(ruleBody(CSS, '.lxm-volume-value')).toBeUndefined()
+    // 数值改为无视觉负担的方式提供：aria-valuetext（读屏可读、界面不显示）
+    expect(pop).toContain('aria-valuetext')
+  })
+
+  it('喇叭按钮用内联 SVG 线稿图标，不用 emoji（与 ⚙/☰/♪ 同一视觉重量）', () => {
+    const pop = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'VolumePopover.tsx'), 'utf8')
+    expect(pop).toContain('<svg viewBox="0 0 16 16"')
+    expect(pop).toContain('fill="currentColor"')
+    // emoji 与插件深色线稿 UI 不协调，且各平台渲染不一致：不允许回来
+    expect(pop).not.toContain('🔊')
+    expect(pop).not.toContain('🔇')
+    // 静音态仍有可辨识的表现：斜杠那条 path
+    expect(pop).toMatch(/10\.9 6\.2/)
+  })
+
+  it('旧的卡片内联弹层样式已清理（不留死规则）', () => {
+    // .lxm-volume-wrap 是"面板留在卡片里"那版的锚点容器，现在按钮自己就是锚点
+    expect(ruleBody(CSS, '.lxm-volume-wrap')).toBeUndefined()
+    expect(ruleBody(CSS, '.lxm-volume')).toBeUndefined()
+  })
+})
+
+describe('「我的口味」窗口的按钮用法', () => {  /** 读取源码（测试跑在 .test-dist/tests 下，源码仍在仓库里）。 */
   const source = readFileSync(join(__dirname, '..', '..', 'src', 'ui', 'TasteWindow.tsx'), 'utf8')
 
   /** 把源码切成一个个 <button …>…</button> 片段。 */

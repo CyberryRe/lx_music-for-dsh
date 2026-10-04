@@ -1,9 +1,8 @@
 {
-  "$schema": "./docs/manifest.schema.json",
   "id": "lx-music-for-dsh",
   "name": "LX Music for DSH",
-  "version": "1.2.3",
-  "description": "为 LX Music 提供增强控制界面与 LLM 交互能力：侧边栏迷你播放卡片（含播放模式切换）、搜索/播放列表主窗口、音源与音质策略设置窗口、细粒度音乐工具集（music_search/play/playlist/prev/next/control）、音乐画像（实验性，默认关闭；本地口味记忆 + 精确点播 music_profile/music_play_song/music_taste）与「我的口味」窗口。⚠️ 安装/更新后请**彻底退出并重启 DSH**（不是关窗口）才会加载新代码：已知问题，下个大版本修复",
+  "version": "1.3.0",
+  "description": "为 LX Music 提供增强控制界面与 LLM 交互能力：侧边栏迷你播放卡片（音量调节 + 播放模式切换）、滚动歌词窗口（逐字卡拉OK / 翻译 / 点击跳转，五平台歌词 + 音源脚本 lyric）、系统媒体控件（SMTC）元数据与硬件媒体键、搜索/播放列表主窗口、音源与音质策略设置窗口、细粒度音乐工具集（music_search/play/playlist/prev/next/control）、音乐画像（实验性，默认关闭）。⚠️ 安装/更新后请彻底退出并重启 DSH（不是关窗口）才会加载新代码：已知问题，下个大版本修复",
   "author": "dsh",
   "license": "Apache-2.0",
   "type": "plugin",
@@ -18,7 +17,7 @@
   },
   "lifecycle": {
     "apply": "host: apply(ctx, config) —— 注册 PlaybackService(Remote) / 细粒度音乐工具集（music_search/play/playlist/prev/next/control + 兼容 search_and_play）/ storage 域",
-    "clientApply": "client: apply(ctx) —— 注入 sidebar.footer.action 卡片与自绘模态窗口",
+    "clientApply": "client: apply(ctx) —— 注入 sidebar.footer.action 卡片（含音量条）、歌词窗口与自绘模态窗口，并挂载 MediaSession 桥（系统媒体控件 / 媒体键）",
     "config": "schemastery z.object，见 src/index.ts 的 Config"
   },
   "inject": {
@@ -75,7 +74,7 @@
     {
       "slot": "sidebar.footer.action",
       "kind": "list",
-      "description": "侧边栏「设置」上方的迷你播放控制卡片"
+      "description": "侧边栏「设置」上方的迷你播放控制卡片（封面/进度/音量/播放模式），以及主窗口、设置窗口、「我的口味」窗口与滚动歌词窗口的宿主"
     }
   ],
   "configuration": {
@@ -94,8 +93,9 @@
     "method": "node scripts/install-to-dsh.mjs —— npm pack + `dsh plugin --profile web add <tgz>`；包声明 dsh.bundle.patch，作为 profile 组合层自动激活（dsh >= 0.1.5-rc.1）。详见 docs/development.md §6"
   },
   "compatibility": {
-    "dsh": "双契约：@deepseek-ai/dsh 0.1.5-rc.1 ～ 0.1.7-rc.2 均可（client 面同时携带 0.1.5 的 codec.schema 与 0.1.7 的 create()）",
-    "previous": "1.1.0 修复桌面版（Electron 宿主）音源校验/导入子进程以 code=0 退出的问题；1.0.2 仅适配 0.1.7（移除了 codec.schema，在 0.1.5 上无法激活）；1.0.1 仅适配 0.1.5（不含 create()，在 0.1.7 上抛 strict codec has no create() factory）",
-    "storage": "1.2.0 起 storage domain 由 single 换成 per-record 布局（$DSH_HOME/storages/lx_music/ 目录），启动时自动迁移旧 lx_music.json（旧文件原样保留可回退）；同时启用 invalidRecords=backup-and-skip，坏记录改名备份而不再让整个 domain 打不开"
+    "dsh": "目标 @deepseek-ai/dsh 0.2.0（也兼容 0.1.7 / 0.1.5）：可选能力（storageDomain）走 ctx.inject 作用域注入以适配 0.2.0 的加载时序；client 面同时携带 0.1.5 的 codec.schema 与 0.1.7 的 create() 双契约。详见 docs/versioning.md",
+    "previous": "1.2.3 修音源持久化/切歌竞态/不再自动删数据；1.1.0 修复桌面版（Electron 宿主）音源校验/导入子进程以 code=0 退出的问题；1.0.2 仅适配 0.1.7（移除了 codec.schema，在 0.1.5 上无法激活）；1.0.1 仅适配 0.1.5（不含 create()，在 0.1.7 上抛 strict codec has no create() factory）",
+    "storage": "1.2.0 起 storage domain 由 single 换成 per-record 布局（$DSH_HOME/storages/lx_music/ 目录），启动时自动迁移旧 lx_music.json（旧文件原样保留可回退）；同时启用 invalidRecords=backup-and-skip，坏记录改名备份而不再让整个 domain 打不开",
+    "runtime": "1.3.0 的歌词/SMTC 依赖运行环境能力，全部按缺失降级：SMTC 需要 Electron/Chromium 的 navigator.mediaSession（缺失时桥为空操作，不影响播放）；歌词的 kw 需要 Node 的 TextDecoder('gb18030')、wy 需要 Brotli 解压（node:zlib），均为 Node 18+ 内置能力，无新增 npm 依赖"
   }
 }

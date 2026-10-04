@@ -36,11 +36,6 @@ export interface TasteFacadeDeps {
   onWarn?: (message: string, err?: unknown) => void
 }
 
-/**
- * 画像门面：同时实现**捕获钩子**（转发给 recorder，并按开关实时门控）与 **UI/Remote 读写**。
- *
- * 门控放在这里而不是接线时：用户关掉画像开关后立刻停止录制，不需要重启或重连。
- */
 /** MemoryConfig → UI 视图（形状一致；显式展开可选字段，避免 exactOptionalPropertyTypes 报错）。 */
 function toConfigView(memory: MemoryConfig): MemoryConfigView {
   return {
@@ -58,6 +53,11 @@ function toConfigView(memory: MemoryConfig): MemoryConfigView {
   }
 }
 
+/**
+ * 画像门面：同时实现**捕获钩子**（转发给 recorder，并按开关实时门控）与 **UI/Remote 读写**。
+ *
+ * 门控放在这里而不是接线时：用户关掉画像开关后立刻停止录制，不需要重启或重连。
+ */
 export class TasteFacade {
   private readonly store: TasteStore
   private readonly recorder?: TasteRecorder

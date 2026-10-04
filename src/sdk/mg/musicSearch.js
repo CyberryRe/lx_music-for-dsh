@@ -1,4 +1,5 @@
-﻿import { httpFetch } from '../request'
+// 移植自 lx-music-desktop musicSdk（Apache-2.0）：mg（咪咕）搜索。仅搜索路径，未改动算法。
+import { httpFetch } from '../request'
 import { sizeFormate, formatPlayTime } from '../utils'
 import { toMD5, formatSingerName } from '../utils'
 
@@ -171,7 +172,9 @@ export default {
         })
 
         let img = data.img3 || data.img2 || data.img1 || null
-        if (img && !/https?:/.test(data.img3)) img = 'http://d.musicapp.migu.cn' + img
+        // 判的是**最终选中的** img；此前误写成 data.img3，img3 缺失时会拿 undefined 去匹配
+        // 正则（必然不匹配），于是 img2/img1 里已是完整 URL 的地址被再拼一次域名前缀。
+        if (img && !/^https?:/.test(img)) img = 'http://d.musicapp.migu.cn' + img
 
         list.push({
           singer: formatSingerName(data.singerList),

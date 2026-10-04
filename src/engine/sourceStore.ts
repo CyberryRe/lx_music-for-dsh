@@ -29,9 +29,7 @@ export interface SourceStoreFace {
   remove(id: string): Promise<boolean>
   order(): string[]
   setOrder(ids: string[]): Promise<void>
-  /** 是否写到"重启后还在"的持久层（诊断用：storage domain / 文件 = true）。 */
-  isDurable(): boolean
-  /** 持久层种类（诊断用，进插件状态文件）。 */
+  /** 持久层种类（诊断用，进插件状态文件）：domain=storage domain，file=兜底文件，memory=不落盘。 */
   kind(): 'domain' | 'file' | 'memory'
 }
 
@@ -76,9 +74,6 @@ export class MemorySourceStore implements SourceStoreFace {
     for (const id of this.records.keys()) {
       if (!this.ids.includes(id)) this.ids.push(id)
     }
-  }
-  isDurable(): boolean {
-    return false
   }
   kind(): 'memory' {
     return 'memory'
@@ -240,10 +235,6 @@ export class DomainSourceStore implements SourceStoreFace {
     await this.writeOrder()
   }
 
-  isDurable(): boolean {
-    return true
-  }
-
   kind(): 'domain' {
     return 'domain'
   }
@@ -316,10 +307,6 @@ export class FileSourceStore implements SourceStoreFace {
     } catch (err) {
       this.onError?.(`音源顺序写回失败（不影响音源本身）: ${err instanceof Error ? err.message : String(err)}`, err)
     }
-  }
-
-  isDurable(): boolean {
-    return true
   }
 
   kind(): 'file' {

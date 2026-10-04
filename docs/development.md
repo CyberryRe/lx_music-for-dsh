@@ -7,44 +7,26 @@ LX Music 增强控制插件（deepseek_harness / DSH Web 模式内置插件）�
 
 ## 1. 项目结构
 
+**模块级文件职责表在 [architecture.md §3](architecture.md)** —— 那是唯一维护点。
+这里只列顶层布局，避免两处各写一份然后逐渐漂移。
+
 ```
 lx_plugin/
 ├── manifest.json            # 插件清单（元数据：入口、生命周期、工具、配置项）
+├── cordis.patch.yml         # 行配置模板（安装/升级时写入 profile 的 config）
 ├── package.json             # npm 包 + dsh.client 声明（浏览器插件名册）
 ├── tsconfig.json            # 类型检查配置
 ├── tsconfig.tests.json      # 测试编译配置（CJS 输出）
 ├── eslint.config.js         # ESLint flat config
-├── scripts/
-│   ├── build.mjs            # 构建 host(client) bundle（rollup + TypeScript 插件）
-│   ├── compile-tests.mjs    # 测试编译（TypeScript API，输出 .test-dist）
-│   ├── smoke-live.mjs       # 可选：真实网络冒烟（五平台 SDK 搜索）
-│   ├── install-to-dsh.mjs   # 写入 DSH profile 插件行（幂等）
-│   └── link-dsh.mjs         # 镜像 DSH 运行时（显式来源/本地/全局）+ 桌面版版本漂移比对
-├── src/
-│   ├── index.ts             # host 入口：Config / apply / storage domain
-│   ├── playback.ts          # PlaybackService（Typert Remote：播放权威状态，含播放模式）
-│   ├── tools.ts             # LLM 音乐工具集（music_search/play/playlist/prev/next/control + 兼容 search_and_play）
-│   ├── lxclient.ts          # lxserver HTTP 客户端（可选，超时 10s / 重试 2 次）
-│   ├── provider.ts          # Provider 门面（engine / lxserver / mock 切换）
-│   ├── mock.ts              # 内置 mock 音源（演示/测试）
-│   ├── ratelimit.ts         # 滑动窗口限流器
-│   ├── engine/              # 内置音源引擎（完全独立）
-│   │   ├── sandbox.ts       #   子进程沙箱宿主：spawn runner + IPC 协议 + 超时杀进程兜底
-│   │   ├── runner.js        #   子进程（隔离边界）：lx 协议执行、SSRF 网络策略、日志转发
-│   │   ├── musicEngine.ts   #   引擎调度（脚本轮询/重试/音源管理）
-│   │   └── sourceStore.ts   #   音源脚本本地持久化
-│   ├── sdk/                 # 内置音乐 SDK（移植 lx-music-desktop，Apache-2.0）
-│   │   ├── index.ts         #   五平台搜索门面 + 结果规范化
-│   │   ├── request.ts       #   httpFetch（node:http/https 实现）
-│   │   ├── utils.ts         #   格式化/解码工具
-│   │   └── {kw,kg,tx,wy,mg}/ #   各平台搜索模块（原样移植 + import 适配）
-│   ├── shared/types.ts      # host/client 共享类型与默认设置
-│   ├── client.ts            # client 入口：sidebar.footer.action 卡片 + 窗口桥
-│   └── ui/                  # React 组件（Card / MainWindow / SettingsWindow / Modal / store / playModes）
+├── scripts/                 # 构建 / 测试编译 / 安装到 DSH / 镜像运行时 / 冒烟
+├── src/                     # 源码：host 入口 + client UI + 内置引擎 + SDK + 画像
 ├── tests/                   # 单元测试（node:test + mini 断言层）
-└── docs/
-    └── development.md       # 本文档
+└── docs/                    # architecture / internals / development（本文档）/ versioning /
+                             # design-taste-memory，另有 research-* / video-script 内部稿
 ```
+
+> 读代码建议先看 [architecture.md](architecture.md)：完整文件职责表、四条主数据流、
+> 「不能碰的硬约束」、「我要改 X 该动哪里」都在那里。
 
 ## 2. 环境准备
 
@@ -52,7 +34,10 @@ lx_plugin/
 npm install          # 安装 devDependencies（--ignore-scripts 亦可）
 npm run setup        # 等价于 node scripts/link-dsh.mjs
 # 说明：@deepseek-ai/* 运行时包从已安装的 DSH 依赖树镜像到本地 node_modules，
-# 保证开发/测试与 DSH 运行时版本一致（当前：@deepseek-ai/dsh@0.1.7-rc.2）。
+# 保证开发/测试与 DSH 运行时版本一致（当前镜像：@deepseek-ai/dsh@0.1.7-rc.2）。
+# 注意：镜像版本 = 本机 DSH 依赖树的版本，与插件「目标 DSH 版本」是两件事
+# （1.3.0 目标是 0.2.0，但 0.1.7 → 0.2.0 的运行时包字节相同，断的只是应用层加载时序，
+#  详见 docs/versioning.md §2；所以本机镜像停在 0.1.7-rc.2 是预期的）。
 # 来源优先级：--from <dir> / $DSH_RUNTIME_DIR → 项目内 node_modules/@deepseek-ai/dsh
 # → 全局 npm 安装树；脚本按版本号比对，镜像过期的包自动重拷、来源已不再提供的包自动
 # 清理（--no-prune 关闭；--force 强制重镜像 @deepseek-ai/*）。
@@ -77,7 +62,8 @@ npm run setup        # 等价于 node scripts/link-dsh.mjs
 | `npm run setup` | 镜像 DSH 运行时（见 §2；`--from/--force/--allow-drift/--full` 见 `node scripts/link-dsh.mjs --help`） |
 | `npm run typecheck` | `tsc --noEmit` 类型检查 |
 | `npm run lint` | ESLint（0 警告阈值） |
-| `npm test` | 编译并运行全部单元测试（385 例） |
+| `npm test` | 编译并运行全部单元测试（399 例 / 102 套） |
+| `npm run verify` | 门禁三连：`typecheck` + `lint` + `test` |
 | `npm run pack` | 构建 + `npm pack` 产出可安装 tarball |
 | `npm run install:dsh` | 打包 + `dsh plugin add` 安装到 profile（默认 web），含旧版残留迁移与结果校验 |
 | `npm run smoke:browser -- <url>` | 真实浏览器端到端验证（GUI 启动 + 卡片 + Remote 往返） |
@@ -540,7 +526,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 - [ ] `npm run lint` 通过（0 error / 0 warning）
 - [ ] `npm run typecheck` 通过
 - [ ] `npm run build` 生成 lib/index.js + lib/client.js + lib/runner.cjs
-- [ ] `npm test` 全部通过（385 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
+- [ ] `npm test` 全部通过（458 例，运行在镜像的 0.1.7-rc.2 运行时上；双契约用例同时复刻 0.1.5 与 0.1.7 的校验/解码路径）
 - [ ] `node scripts/link-dsh.mjs` 报出「与桌面版一致：0.1.7-rc.2」（不一致会拒绝执行，`--allow-drift` 可跳过）
 - [ ] `node scripts/install-to-dsh.mjs --profile <p>` 一条命令装好，且包出现在
       profile `package.json` 的 `dsh.profile.bundles` 里（不再需要手工 patch 行）
@@ -558,6 +544,38 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
       含防刷与 action 日志）
 - [ ] 无 lxserver 时内置引擎全功能可用（搜索开箱即用；导入音源脚本后直链解析正常）；
       配置 lxserver 后搜索/直链/音源管理走真实服务
+
+### 9.0 音量 / 滚动歌词 / 系统媒体控件（1.3.0）的人工实测清单
+
+这三项**只能在本机实测**（单测覆盖了逻辑，但系统媒体面板与真实歌词源不在测试环境里）：
+
+- [ ] **音量**：点卡片上的喇叭图标 → 弹出**一根竖滑块**（面板里没有数值、也没有喇叭按钮），
+      拖动 → 声音立刻变化，且**上端 = 100%、下端 = 0%**（滑块位置的填充色应随之从下往上增长）；
+      松手后刷新页面/重开窗口，音量仍是拖动后的值（说明已同步到 host）。
+      面板**不能被卡片裁断**（这是它改成 portal 的原因）：卡片有 `overflow:hidden`，
+      面板由 `VolumePopover` 手写 DOM portal 挂到 `<body>` + `position: fixed`
+      （`src/ui/VolumePopover.tsx`），并实时按按钮矩形定位、夹在视口内；
+      **把窗口拖矮**时上方放不下应自动翻到按钮下方（箭头朝上），而不是被截断。
+      点面板/按钮之外、按 Esc、或把卡片滚出视口都应收起；面板不应把卡片撑高。
+      图标本身是内联 SVG 线稿喇叭（不是 emoji）：静音或音量 0 时应变成带斜杠的那版。
+      注意：**静音入口只在 host 侧**（`music_control` 工具与设置窗口）——卡片面板刻意不再放静音按钮。
+- [ ] **SMTC（系统媒体控件）**：放一首歌，然后打开 Windows 的媒体面板（音量键 / 快速设置 → 媒体）
+      —— 面板上应显示**歌名 + 歌手 + 专辑封面**，而不是「<会话名> — DeepSeek Harness」；
+      面板与键盘媒体键的播放/暂停/上一首/下一首/快进快退都应生效。
+      自查入口：设置窗口「音质策略」页底部的「系统媒体控件（SMTC / 媒体键）」一行
+      （歌词窗口底部也有一行），显示「已推送《歌名》… · 已带封面」即表示元数据已交给 Chromium。
+      若仍显示会话名：先看那一行的 note（例如"当前内核不支持"），再确认是**通过界面点过播放**
+      —— Chromium 需要用户手势才允许起播，没有媒体会话就不会有面板条目。
+- [ ] **滚动歌词**（入口当前**已隐藏**：卡片上原「词」按钮的位置换成了喇叭；歌词链路本身完整保留：
+      `store.openLyrics/refreshLyric`、`LyricsWindow.tsx`、`WindowsHost` 的 `lyricsOpen` 分支与 host 侧
+      `getLyric` 都没动 —— 复测时在 `src/ui/Card.tsx` 的喇叭按钮旁加回那个「词」按钮即可）：
+      点「词」→ 歌词窗口自动取词；播放时当前句高亮并自动居中；
+      有逐字轴的歌（kw/wy/kg 多数歌）能看到**逐字高亮**；滚轮向上翻会停止跟随，
+      点「回到当前」恢复；点任意一行跳到那一句；带翻译的歌点「译」可切换；
+      底部的来源角标能看出歌词来自「音源脚本 / 内置 SDK / lxserver / 演示」。
+- [ ] **歌词缺失路径**：找一首没有歌词的歌 → 窗口显示明确原因（不是空白、不是崩溃）；
+      若已启用实现了 `lyric` action 的音源脚本（仓库自带 `sources/qdy-latest.js` 就是一个），
+      角标应显示来源为「音源脚本」。
 
 ### 9.2 实验性开关（音乐画像）的人工实测清单
 
@@ -617,6 +635,7 @@ node scripts/compile-tests.mjs && node scripts/smoke-live.mjs
 
 | 插件版本 | DSH 版本 | 说明 |
 |---|---|---|
+| **1.3.0** | **0.2.0**（也兼容 0.1.7 / 0.1.5） | **音量调节**（卡片）+ **滚动歌词窗口**（逐字卡拉OK / 翻译 / 点击跳转）+ **系统媒体控件（SMTC）**元数据/封面与媒体键。歌词来源：音源脚本 `lyric` → 内置五平台歌词 → lxserver → mock；host 侧解析成 `LyricDoc` 并带 6h 缓存。**无新增 npm 依赖、无新增配置项** |
 | **1.2.0** | **0.1.5 ～ 0.1.7 均可** | **音乐画像**：本地口味记忆（`music_profile` / `music_play_song` 精确点播 / `music_taste`）+「我的口味」窗口 + 自带 skill；**存储布局 single → per-record**（启动时自动迁移，旧文件保留）+ `invalidRecords=backup-and-skip` |
 | 1.1.0 | 0.1.5 ～ 0.1.7 均可 | **双契约**（codec 同时带 `schema` 与 `create()`）+ **桌面版 Electron 沙箱修复**（`ELECTRON_RUN_AS_NODE`） |
 | 1.0.2 | `@deepseek-ai/dsh@0.1.7-rc.2` | **client 面契约适配**：Typert strict codec 的 `schema` → `create()`；descriptor 类型改绑 DSH 真实协议类型；`link-dsh.mjs` 支持显式来源 + 桌面版版本漂移比对 |
@@ -809,3 +828,25 @@ spawn(process.execPath, [runner])   // 桌面版 → 又起一个 GUI 实例
 | `tests/source-store.test.ts` → `DomainSourceStore` 用例 | 旧文件存储一次性合并（采纳缺失/更新的记录、保留 domain 新版本、顺序、改名标记、不传 `legacyFile` 时不合并） |
 | `tests/host.integration.test.ts` → `storage domain schema 与写入形状一致` | `source_order` 记录是裸 `string[]`（对象形状必须被拒）、`global` 保留 `playMode`、`sources` 记录字段 |
 | `scripts/browser-smoke.mjs` | GUI 能启动（任一 client 行未激活即整体失败）、卡片出现、主窗口打开、`setPlayMode` 参数化 Remote 往返、设置窗口加载音源列表 |
+
+### 10.5 1.3.0（当前版本）：音量 / 滚动歌词 / 系统媒体控件
+
+**(1) 没有断裂点，但有三处"环境能力"要认。** 版本号只动了插件；升级只需彻底重启 DSH。
+三项新能力都按"能力缺失就降级"实现，任何一项不可用都不影响播放：
+
+- **SMTC** 需要内核提供 `navigator.mediaSession`（Electron/Chromium 有；非 Chromium 内核则整桥空操作）。
+- **歌词的酷我链路**需要 Node 的 `TextDecoder('gb18030')`；**网易云歌词**需要 Brotli 解压
+  （`src/sdk/request.ts` 补了 `content-encoding: br` 分支）。都是 Node 内置能力，无新增依赖。
+- **歌词本身可能没有**：这不是错误，窗口会显示具体原因（`LyricDoc.note`）。
+
+**(2) 为什么"SMTC 一直显示会话名"**：页面标题由 `dsh-client-ui-layout` 设成
+`<会话名> — DeepSeek Harness`，而 Chromium 在没有 `MediaMetadata` 时就用**页面标题**当默认元数据。
+插件此前从未写过 metadata，所以面板只能显示会话名。现在 `src/ui/mediaSession.ts` 会在**任何状态下**
+（包括"没有曲目"）都写一份非空 metadata，并在设置窗口「音质策略」页与歌词窗口底部显示"实际推了什么"
+（系统面板没有回读 API，这是唯一的自查入口）。
+
+**(3) 新增/变更的文件**：`src/shared/lrc.ts`、`src/sdk/lyric.ts` + `src/sdk/<平台>/lyric.js`、
+`src/ui/mediaSession.ts`、`src/ui/LyricsWindow.tsx`；`getLyric` remote 方法（host ← client）。
+歌词解析只在 host 做一次（纯函数，可单测），client 只渲染。
+
+**(4) 验收**：见 §9.0 的人工实测清单（音量 / SMTC / 滚动歌词 / 歌词缺失路径）。

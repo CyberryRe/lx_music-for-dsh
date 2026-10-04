@@ -9,6 +9,7 @@ import type {
   SearchOutcome,
   SourceEntry,
 } from './shared/types'
+import { DEFAULT_PLATFORM_PRIORITY } from './shared/types'
 
 export interface LxClientOptions {
   baseUrl: string
@@ -130,7 +131,7 @@ export class LxClient {
       pages?: number
     } = {},
   ): Promise<SearchOutcome> {
-    const sources: MusicSource[] = options.sources && options.sources.length > 0 ? options.sources : ['wy', 'tx', 'kg', 'kw', 'mg']
+    const sources: MusicSource[] = options.sources && options.sources.length > 0 ? options.sources : DEFAULT_PLATFORM_PRIORITY
     const attempts: SearchOutcome['attempts'] = []
     for (const source of sources) {
       try {
@@ -164,9 +165,12 @@ export class LxClient {
     })
   }
 
-  /** 歌词（POST /api/music/lyric）。 */
-  async getLyric(songInfo: MusicInfo): Promise<{ lyric?: string; tlyric?: string }> {
-    return this.request<{ lyric?: string; tlyric?: string }>('/api/music/lyric', {
+  /**
+   * 歌词（POST /api/music/lyric）。
+   * 返回 4 个字段：`lyric` / `tlyric` / `rlyric` / `lxlyric`（逐字）；旧版服务端可能只给前两个。
+   */
+  async getLyric(songInfo: MusicInfo): Promise<{ lyric?: string; tlyric?: string; rlyric?: string; lxlyric?: string }> {
+    return this.request<{ lyric?: string; tlyric?: string; rlyric?: string; lxlyric?: string }>('/api/music/lyric', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ songInfo }),

@@ -27,15 +27,12 @@ import type {
   SearchAndPlayOutput,
   SearchResultItem,
 } from './shared/types'
+import { MUSIC_SOURCES, PLAY_MODE_VALUES, QUALITIES } from './shared/types'
 
 export interface MusicToolsOptions {
   service: PlaybackService
   now?: () => number
 }
-
-const SEARCH_SOURCES = ['kw', 'wy', 'kg', 'tx', 'mg']
-const QUALITIES = ['128k', '320k', 'flac', 'flac24bit', 'flac32bit', 'wav']
-const PLAY_MODES = ['list', 'single', 'order', 'shuffle']
 
 const CONTROL_LABEL: Record<string, string> = {
   toggle: '播放/暂停切换',
@@ -234,7 +231,7 @@ function buildSearchTool(service: PlaybackService, now: () => number): ReturnTyp
     parameters: {
       query: { type: 'string', required: true, description: '歌曲名 / 歌手 / 模糊描述。' },
       limit: { type: 'integer', description: '返回结果数，默认 5（1-20）。' },
-      source: { type: 'string', enum: SEARCH_SOURCES, description: '指定音乐平台（可选），缺省按配置的平台优先级。' },
+      source: { type: 'string', enum: MUSIC_SOURCES, description: '指定音乐平台（可选），缺省按配置的平台优先级。' },
       singer: { type: 'string', description: '歌手过滤（可选）。' },
       with_url: { type: 'boolean', description: '是否解析直链预览，默认 false。' },
     },
@@ -312,7 +309,7 @@ function buildPlayTool(service: PlaybackService, now: () => number): ReturnType<
       query: { type: 'string', description: '搜索关键词（与 index 二选一）。' },
       index: { type: 'integer', description: '播放列表序号（从 0 开始，与 query 二选一）。' },
       result_index: { type: 'integer', description: 'query 搜索结果的第几首（从 0 开始），默认 0。' },
-      source: { type: 'string', enum: SEARCH_SOURCES, description: '指定搜索平台（可选）。' },
+      source: { type: 'string', enum: MUSIC_SOURCES, description: '指定搜索平台（可选）。' },
       auto_play: { type: 'boolean', description: '是否立即播放，默认 true；false 时仅加入播放列表。' },
       position: { type: 'string', enum: ['tail', 'next'], description: '加入播放列表的位置：tail=队尾（默认）/ next=当前曲目之后。' },
     },
@@ -412,7 +409,7 @@ function buildPlaylistTool(service: PlaybackService, now: () => number): ReturnT
       },
       query: { type: 'string', description: 'add：搜索关键词。' },
       limit: { type: 'integer', description: 'add：加入数量，默认 5（1-20）。' },
-      source: { type: 'string', enum: SEARCH_SOURCES, description: 'add：指定搜索平台（可选）。' },
+      source: { type: 'string', enum: MUSIC_SOURCES, description: 'add：指定搜索平台（可选）。' },
       position: { type: 'string', enum: ['tail', 'next'], description: 'add：加入位置 tail（队尾，默认）/ next（当前曲目之后）。' },
       index: { type: 'integer', description: 'remove：序号（从 0 开始，与 id 二选一）。' },
       id: { type: 'string', description: 'remove：歌曲 id（与 index 二选一）。' },
@@ -576,7 +573,7 @@ function buildControlTool(service: PlaybackService, now: () => number): ReturnTy
       seconds: { type: 'number', description: 'seek：目标进度（秒）。' },
       volume: { type: 'number', description: 'volume：音量 0-1。' },
       quality: { type: 'string', enum: QUALITIES, description: 'quality：目标音质。' },
-      play_mode: { type: 'string', enum: PLAY_MODES, description: 'playMode：列表循环/单曲循环/顺序播放/随机播放。' },
+      play_mode: { type: 'string', enum: PLAY_MODE_VALUES, description: 'playMode：列表循环/单曲循环/顺序播放/随机播放。' },
     },
     output: {
       schema: {
@@ -688,7 +685,7 @@ function buildLegacyTool(service: PlaybackService, now: () => number): ReturnTyp
       query: { type: 'string', required: true, description: '歌曲名 / 歌手 / 模糊描述。' },
       limit: { type: 'integer', description: '返回结果数，默认 5。' },
       auto_play: { type: 'boolean', description: '是否自动播放第一首，默认 true。' },
-      source: { type: 'string', enum: SEARCH_SOURCES, description: '指定音乐平台（可选），缺省按插件配置的平台优先级。' },
+      source: { type: 'string', enum: MUSIC_SOURCES, description: '指定音乐平台（可选），缺省按插件配置的平台优先级。' },
     },
     output: {
       schema: {
@@ -773,15 +770,5 @@ export function registerMusicTools(ctx: { tools: { register(tool: unknown): void
   ctx.tools.register(buildNavTool(service, now, 'prev'))
   ctx.tools.register(buildNavTool(service, now, 'next'))
   ctx.tools.register(buildControlTool(service, now))
-  ctx.tools.register(buildLegacyTool(service, now))
-}
-
-/**
- * 旧版入口（兼容）：仅注册 search_and_play。
- * @deprecated 请使用 registerMusicTools 注册完整工具集。
- */
-export function registerSearchAndPlayTool(ctx: { tools: { register(tool: unknown): void } }, options: MusicToolsOptions): void {
-  const { service } = options
-  const now = options.now ?? Date.now
   ctx.tools.register(buildLegacyTool(service, now))
 }

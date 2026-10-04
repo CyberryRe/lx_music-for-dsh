@@ -1,4 +1,5 @@
-﻿
+// 移植自 lx-music-desktop musicSdk（Apache-2.0）：tx 签名请求封装（zzcSign）。
+
 import { httpFetch } from '../../request'
 import { zzcSign } from './crypto'
 

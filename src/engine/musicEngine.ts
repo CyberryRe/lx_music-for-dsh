@@ -3,9 +3,11 @@
 // - 直链解析：音源脚本子进程沙箱（lx-music-desktop 音源脚本协议，隔离执行）
 // - 音源管理：本地持久化（storage domain sources 表）
 
-import type { MusicInfo, MusicQualityType, MusicSource, MusicUrlResult, Quality, SearchOutcome, SearchRequest, SourceEntry } from '../shared/types'
+import type { MusicInfo, MusicSource, MusicUrlResult, Quality, SearchOutcome, SearchRequest, SourceEntry } from '../shared/types'
+import { DEFAULT_PLATFORM_PRIORITY } from '../shared/types'
 import type { Provider } from '../provider'
 import { searchWithPriority } from '../sdk'
+import { fetchPlatformLyric, scriptLyricToPayload, type LyricFetch } from '../sdk/lyric'
 import { loadSourceScript, type LoadedSourceScript, extractScriptMetadata, SourceScriptError, getSandboxRequestLog } from './sandbox'
 import { DomainSourceStore, FileSourceStore, type SourceRecord, type SourceStoreFace } from './sourceStore'
 import { httpFetch } from '../sdk/request'
@@ -88,11 +90,6 @@ export class EngineProvider implements Provider {
     return this.store.kind()
   }
 
-  /** 音源是否写到"重启后还在"的持久层。 */
-  isDurable(): boolean {
-    return this.store.isDurable()
-  }
-
   /** 非致命持久化失败的统一出口（走宿主 logger，桌面版 console 看不到）。 */
   private reportStoreError(message: string, error: unknown): void {
     this.onStoreError?.(`[lx-music] ${message}`, error)
@@ -151,7 +148,7 @@ export class EngineProvider implements Provider {
   // ── Provider: 搜索（内置 SDK） ────────────────────────────────────────────
 
   async search(req: SearchRequest): Promise<SearchOutcome> {
-    const sources: MusicSource[] = req.sources && req.sources.length > 0 ? req.sources : ['wy', 'tx', 'kg', 'kw', 'mg']
+    const sources: MusicSource[] = req.sources && req.sources.length > 0 ? req.sources : DEFAULT_PLATFORM_PRIORITY
     const query = req.singer ? `${req.query} ${req.singer}`.trim() : req.query
     return searchWithPriority(query, { sources, limit: req.limit ?? 20 })
   }
@@ -194,6 +191,38 @@ export class EngineProvider implements Provider {
       console.error(`[lx-music] 最近音源脚本请求:\n  ${recent.join('\n  ')}`)
     }
     throw err
+  }
+
+  // ── Provider: 歌词（音源脚本 lyric → 内置 SDK） ──────────────────────────
+  //
+  // 顺序刻意如此：
+  //   1. 音源脚本：lx 音源协议里 `lyric` 是与 `musicUrl` 并列的 action（本仓库自带的
+  //      `sources/qdy-latest.js` 就实现了它，并声明 `actions: ['musicSearch','musicUrl','lyric']`）。
+  //      **只在脚本显式声明了 `lyric` 时才调用** —— 否则会白白拉起子进程并等一次超时。
+  //   2. 内置 SDK：五平台歌词接口（不需要任何音源脚本，保证"有网就能看到歌词"）。
+  //
+  // 两条都失败时抛出聚合错误；歌词拿不到**不是**致命错误，调用方（PlaybackService）会把它
+  // 收敛成带 note 的空 LyricDoc 给 UI。
+  async getLyric(music: MusicInfo): Promise<LyricFetch> {
+    const errors: string[] = []
+    for (const script of this.scriptsFor(music.source)) {
+      const registration = script.sources[music.source]
+      if (!registration?.actions?.includes('lyric')) continue
+      try {
+        const raw = await script.call('lyric', music.source, { musicInfo: normalizeSongInfo(music) })
+        const payload = scriptLyricToPayload(raw)
+        if (payload) return { payload, source: 'script', format: payload.format ?? 'script' }
+        errors.push(`${script.name}: 返回了空歌词`)
+      } catch (err) {
+        errors.push(`${script.name}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    try {
+      return await fetchPlatformLyric(music)
+    } catch (err) {
+      errors.push(`内置 SDK: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    throw new Error(`歌词获取失败（${music.name} - ${music.singer} [${music.source}]）：${errors.join('；')}`)
   }
 
   // ── Provider: 音源管理 ────────────────────────────────────────────────────
@@ -330,11 +359,6 @@ export class EngineProvider implements Provider {
   async reorderSources(ids: string[]): Promise<{ success: boolean; error?: string }> {
     await this.store.setOrder(ids)
     return { success: true }
-  }
-
-  /** 直链预览需要的音质列表（供工具展示）。 */
-  qualitysOf(music: MusicInfo): MusicQualityType[] {
-    return music.meta.qualitys ?? []
   }
 
   async ping(): Promise<boolean> {

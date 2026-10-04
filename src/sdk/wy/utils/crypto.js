@@ -1,3 +1,4 @@
+// 移植自 lx-music-desktop musicSdk（Apache-2.0）：wy 加密（eapi/weapi）。
 // https://github.com/Binaryify/NeteaseCloudMusicApi/blob/master/util/crypto.js
 import { createCipheriv, createDecipheriv, publicEncrypt, randomBytes, createHash, constants } from 'crypto'
 const iv = Buffer.from('0102030405060708')

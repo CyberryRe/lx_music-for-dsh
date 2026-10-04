@@ -1,4 +1,5 @@
-﻿// import { httpFetch } from '../request'
+// 移植自 lx-music-desktop musicSdk（Apache-2.0）：wy（网易云）搜索。仅搜索路径，未改动算法。
+// import { httpFetch } from '../request'
 // import { weapi } from './utils/crypto'
 import { sizeFormate, formatPlayTime } from '../utils'
 // import musicDetailApi from './musicDetail'

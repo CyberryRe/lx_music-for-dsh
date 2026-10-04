@@ -1,25 +1,30 @@
 // 设置窗口（模块3）：音源管理（导入/启停/删除/排序）、音质策略（全局音质/每音源平台优先级）、
-// 自动拉取规则（切歌自动最高音质/降级策略）。点击侧边栏卡片的齿轮打开。
+// 自动拉取规则（切歌自动最高音质/降级策略）、系统媒体控件自检。点击侧边栏卡片的齿轮打开。
 
 import { useRef, useState, useSyncExternalStore } from 'react'
 import type { LxStore } from './store'
 import type { DraggableWindowProps } from './Modal'
-import type { MusicSource, Quality, SourceEntry } from '../shared/types'
-
-const SOURCE_LABEL: Record<string, string> = {
-  kw: '酷我',
-  wy: '网易云',
-  kg: '酷狗',
-  tx: 'QQ音乐',
-  mg: '咪咕',
-  local: '本地',
-}
-
-const QUALITY_OPTIONS: Quality[] = ['128k', '320k', 'flac', 'flac24bit', 'flac32bit', 'wav']
+import type { MusicSource, Quality, SmtcStatus, SourceEntry } from '../shared/types'
+import { QUALITIES, sourceLabel } from '../shared/types'
 
 export interface SettingsWindowProps {
   store: LxStore
   Window: (props: DraggableWindowProps) => JSX.Element
+}
+
+/**
+ * SMTC 自检文案（只读展示在「音质策略」页）。
+ *
+ * 存在的理由：系统媒体面板**没有回读 API**，"面板上还是显示会话名"这类问题只能靠插件
+ * 自己记录"到底推出去了什么"来定位（`src/ui/mediaSession.ts` 会写进 store 快照）。
+ */
+function describeSmtc(smtc: SmtcStatus | null): string {
+  if (!smtc) return '未初始化（页面或 host 尚未就绪）'
+  if (!smtc.supported) return `当前内核不支持：${smtc.note ?? 'navigator.mediaSession 缺失'}`
+  const pushed = smtc.title ? `《${smtc.title}》${smtc.artist ? ` - ${smtc.artist}` : ''}` : '（还没有曲目）'
+  const cover = smtc.artwork ? (smtc.artworkPushed ? '已带封面' : '封面未推送') : '无封面'
+  const note = smtc.note ? ` · ${smtc.note}` : ''
+  return `播放状态 ${smtc.playbackState} · 已推送 ${pushed} · ${cover}${note}`
 }
 
 type Tab = 'sources' | 'quality' | 'auto' | 'experimental'
@@ -45,7 +50,7 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
   // 彻底清除本地数据（播放列表 + 画像 + 点歌日志）的二次确认
   const [confirmWipe, setConfirmWipe] = useState(false)
 
-  /** 当前形态：null=存储未就绪，false=未开启，true=已开启。 */
+  /** 画像开关是否已开启（`taste` 为 null 表示存储未就绪，此时一律按未开启处理）。 */
   const memoryEnabled = snapshot.taste?.enabled === true
 
   const enableMemory = (): void => {
@@ -268,7 +273,7 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
                       <span className="lxm-drag-handle" title="排序手柄">⠿</span>
                       <div className="lxm-source-meta">
                         <div className="lxm-source-name">{s.name} <span className="lxm-field-hint">v{s.version ?? '?'}</span></div>
-                        <div className="lxm-source-sub">{s.author ?? '未知作者'} · {platforms.map((p) => SOURCE_LABEL[p] ?? p).join('、') || '无平台'}</div>
+                        <div className="lxm-source-sub">{s.author ?? '未知作者'} · {platforms.map((p) => sourceLabel(p)).join('、') || '无平台'}</div>
                       </div>
                       {s.status && <span className="lxm-source-status" data-ok={s.status === 'success'}>{s.status === 'success' ? '运行正常' : '加载失败'}</span>}
                       <button type="button" className="lxm-btn" title="上移" disabled={i === 0} onClick={() => moveSource(i, -1)}>↑</button>
@@ -293,7 +298,7 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
                           {prio.map((p, pi) => (
                             <div key={p} className="lxm-prio-item">
                               <span className="lxm-badge lxm-badge-gray">{pi + 1}</span>
-                              <span style={{ flex: 1 }}>{SOURCE_LABEL[p] ?? p}</span>
+                              <span style={{ flex: 1 }}>{sourceLabel(p)}</span>
                               <button type="button" className="lxm-btn" disabled={pi === 0} onClick={() => movePlatform(s, pi, -1)}>↑</button>
                               <button type="button" className="lxm-btn" disabled={pi === prio.length - 1} onClick={() => movePlatform(s, pi, 1)}>↓</button>
                             </div>
@@ -315,7 +320,7 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
             <div className="lxm-field">
               <span className="lxm-field-label">全局默认音质</span>
               <select className="lxm-select" value={settings.defaultQuality} onChange={(e) => save({ defaultQuality: e.target.value as Quality })}>
-                {QUALITY_OPTIONS.map((q) => <option key={q} value={q}>{q}</option>)}
+                {QUALITIES.map((q) => <option key={q} value={q}>{q}</option>)}
               </select>
               <span className="lxm-field-hint">播放与 LLM 点歌时的默认请求音质；歌曲不支持时按降级链回退。</span>
             </div>
@@ -332,7 +337,7 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
                 {settings.platformPriority.map((p, i) => (
                   <div key={p} className="lxm-prio-item">
                     <span className="lxm-badge lxm-badge-gray">{i + 1}</span>
-                    <span style={{ flex: 1 }}>{SOURCE_LABEL[p] ?? p}</span>
+                    <span style={{ flex: 1 }}>{sourceLabel(p)}</span>
                     <button type="button" className="lxm-btn" disabled={i === 0} onClick={() => {
                       const list = [...settings.platformPriority]
                       const [m] = list.splice(i, 1)
@@ -352,6 +357,14 @@ export function LxSettingsWindow(props: SettingsWindowProps): JSX.Element {
                   </div>
                 ))}
               </div>
+            </div>
+            <div className="lxm-field">
+              <span className="lxm-field-label">系统媒体控件（SMTC / 媒体键）</span>
+              <span className="lxm-field-hint">{describeSmtc(snapshot.smtc)}</span>
+              <span className="lxm-field-hint">
+                系统媒体面板没有回读 API，这里显示的是插件「实际推出去的内容」：歌名/歌手/专辑/封面，
+                以及播放/暂停/上一首/下一首/快进快退（面板与键盘媒体键都会接回播放器）。
+              </span>
             </div>
           </div>
         </div>

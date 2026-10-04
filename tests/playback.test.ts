@@ -312,3 +312,63 @@ describe('PlaybackService 直链解析（mock provider）', () => {
   })
 })
 
+describe('PlaybackService 歌词（mock provider，1.3.0）', () => {
+  it('没有正在播放的歌时返回带 note 的空文档（不抛错）', async () => {
+    const { service } = makeService()
+    const doc = await service.getLyric({})
+    expect(doc.lines).toHaveLength(0)
+    expect(doc.source).toBe('none')
+    expect(doc.note).toBe('没有正在播放的歌曲')
+  })
+
+  it('对当前曲目返回解析后的 LyricDoc（含逐字轴）', async () => {
+    const { service } = makeService()
+    service.addMusic([song()], 'tail')
+    service.play({ index: 0 })
+    const doc = await service.getLyric({})
+    expect(doc.source).toBe('mock')
+    expect(doc.platform).toBe('wy')
+    expect(doc.lines.length).toBeGreaterThan(0)
+    expect(doc.hasWordTiming).toBe(true)
+    expect(doc.hasTranslation).toBe(true)
+    // 行按时间升序、时长可用（UI 的滚动与高亮依赖这两点）
+    for (let i = 1; i < doc.lines.length; i++) {
+      expect(doc.lines[i]!.time).toBeGreaterThanOrEqual(doc.lines[i - 1]!.time)
+    }
+    expect(doc.lines[0]!.duration).toBeGreaterThan(0)
+  })
+
+  it('按 id 取播放列表里的任意一首', async () => {
+    const { service } = makeService()
+    service.addMusic([song(), song({ id: 's2', name: '七里香' })], 'tail')
+    const doc = await service.getLyric({ id: 's2' })
+    expect(doc.lines.some((l) => l.text.includes('七里香'))).toBe(true)
+  })
+
+  it('返回值为 JSON 安全值（gateway 边界校验会拒绝 undefined）', async () => {
+    const { service } = makeService()
+    service.addMusic([song()], 'tail')
+    service.play({ index: 0 })
+    const doc = await service.getLyric({})
+    expect(JSON.parse(JSON.stringify(doc))).toEqual(doc)
+  })
+
+  it('同一首歌第二次走缓存（不再打 provider）', async () => {
+    const { service } = makeService()
+    service.addMusic([song()], 'tail')
+    service.play({ index: 0 })
+    // 直接给 provider 装计数器：只断言"内容一致"证明不了缓存（mock 每次都会重算同样的歌词）
+    const provider = (service as unknown as { provider: { getLyric(m: MusicInfo): Promise<unknown> } }).provider
+    const original = provider.getLyric.bind(provider)
+    let calls = 0
+    provider.getLyric = async (m: MusicInfo) => {
+      calls++
+      return original(m)
+    }
+    const first = await service.getLyric({})
+    const second = await service.getLyric({})
+    expect(calls).toBe(1)
+    expect(second).toEqual(first)
+  })
+})
+

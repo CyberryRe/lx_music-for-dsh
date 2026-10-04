@@ -17,6 +17,10 @@ export interface SdkMusicItem {
   copyrightId?: string
   strMediaMid?: string
   albumMid?: string
+  /** 咪咕：歌词直链（随搜索结果下发，歌词链路用）。 */
+  lrcUrl?: string | null
+  mrcUrl?: string | null
+  trcUrl?: string | null
   [key: string]: unknown
 }
 

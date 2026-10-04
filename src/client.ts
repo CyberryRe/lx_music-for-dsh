@@ -7,6 +7,7 @@ import { LxStore } from './ui/store'
 import { LxMusicCard } from './ui/Card'
 import { WindowsHost } from './ui/WindowsHost'
 import { CSS, STYLE_TAG } from './ui/styles'
+import { MediaSessionBridge } from './ui/mediaSession'
 import { LXP_REMOTE_CONTRIBUTION } from './ui/remoteContribution'
 
 const NS = 'lxMusic'
@@ -97,14 +98,22 @@ export async function apply(ctx: {
 
   const remote = makeRemote(remoteService)
   const store = new LxStore(remote)
+  // 系统媒体控件（SMTC / 媒体键）桥：把当前曲目推给 navigator.mediaSession，
+  // 并把系统面板的动作接回 store。不支持时整体降级为空操作（见 mediaSession.ts）。
+  const mediaSession = new MediaSessionBridge(store, (status) => store.setSmtcStatus(status))
 
   if (ctx.effect) {
     ctx.effect(() => {
       store.start()
-      return () => store.dispose()
+      mediaSession.start()
+      return () => {
+        mediaSession.dispose()
+        store.dispose()
+      }
     }, 'lx-music: store lifecycle')
   } else {
     store.start()
+    mediaSession.start()
   }
 
   if (ctx.slots) {

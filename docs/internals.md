@@ -2,7 +2,8 @@
 
 本文件收纳 README 里不适合铺开的技术细节：**架构与安全模型**、**Electron 宿主**、
 **codec 双契约**、**存储与本地数据**、**排查手册**、**历史升级坑**。
-面向使用者/维护者；开发流程见 [development.md](development.md)，版本关系见 [versioning.md](versioning.md)。
+面向使用者/维护者；开发流程见 [development.md](development.md)，版本关系见 [versioning.md](versioning.md)，
+**文件职责表 / 数据流 / 改代码的硬约束见 [architecture.md](architecture.md)**。
 
 ## 1. 架构
 
@@ -143,3 +144,71 @@ node scripts/compile-tests.mjs && node scripts/smoke-source.mjs <音源URL> [平
 **1.2.0 → 1.2.1/1.2.2**：1.2.0 与 1.2.1 从未发布到 npm；1.2.0 因 `Config` 必需字段从未激活、
 1.2.1 因直读 `storageDomain` 在 0.2.0 上不激活，两者都只在开发树里存在。升级到 1.2.2 只需要
 **彻底重启 DSH**；存储迁移自动完成。
+
+## 7. 歌词与系统媒体控件（1.3.0）
+
+### 7.1 歌词来源与降级顺序
+
+`PlaybackService.getLyric()` → `Provider.getLyric(music)`，内置引擎里的顺序是：
+
+| 顺序 | 来源 | 说明 |
+|---|---|---|
+| 1 | `script`（音源脚本 `lyric` action） | lx 音源协议里 `lyric` 与 `musicUrl` 并列；**只有脚本在 `lx.send('inited')` 里声明了 `actions: [... 'lyric']` 才会去调**（否则会白拉子进程并等一次 20s 超时）。本仓库自带的 `sources/qdy-latest.js` 就实现了它 |
+| 2 | `sdk`（内置五平台歌词接口） | `src/sdk/<平台>/lyric.js`：kw/wy/kg 有逐字时间轴，tx 只有整行，mg 只有整行（`mrcUrl` 实际拿不到） |
+| 3 | `lxserver` | `providerMode: lxserver` 时打 `POST /api/music/lyric` |
+| 4 | `mock` | 演示数据（带逐字轴，方便自检 UI） |
+
+解析只发生在 host（`src/shared/lrc.ts` 的 `parseLyric`）：把 LRC / LXLR C 变成
+`LyricDoc { lines[], hasWordTiming, hasTranslation, plain, offset }`，client 只做"当前行/当前字"
+查表与滚动。**拿不到歌词不是异常**：`getLyric` 返回带 `note` 的空文档，UI 直接把 `note` 显示出来。
+
+无新增 npm 依赖（这点是被刻意保证的）：酷我需要 `TextDecoder('gb18030')`（Node 内置 ICU），
+网易云需要 Brotli（`node:zlib.brotliDecompressSync`，`request.ts` 里补的 `br` 分支），
+酷狗 krc 需要 `node:zlib` 的 inflate + 16 字节 XOR。
+
+四个实测踩到的坑（回归锁在 `tests/lrc.test.ts` / `tests/lyric-host.test.ts`）：
+
+1. **酷我的行时间正则带 `/g` 且 `^` 锚定**：连续 `.exec()` 会**每隔一行丢一行**（照抄上游会
+   掉一半歌词）。已改为非全局副本。
+2. **酷我的逐字标签 `<a,-a>` 不是"行级标记"**：它**就是每行的第一个词**
+   （实测 `[00:02.250]<3150,-3150>词<6750,450>：…`，`[kuwo:127]` → offset 8 / offset2 7），
+   `getWordInfo(3150,-3150)` 会算出正确的 `<0,450>`。曾经把它当行级 token 删掉，结果每行的
+   **第一个字在逐字渲染时消失**（UI 对当前行只渲染 `words`）——这是回归，别再捡回来。
+   解析层另有"单调不减 + 不越行时长"的校验，不满足就丢掉逐字轴只留文本。
+3. **酷我的 `[kuwo:NNN]` 是逐字时间的除数**：十位/个位出现 0 时上游直接判整首失败，
+   这个硬失败是有意义的（缺一个除数只能瞎猜比例）。这里保留"放弃逐字轴、只给整行"的语义，
+   但不抛错（调用方本来就把它当"没有逐字歌词"）。
+4. **咪咕现在只给明文 LRC**：`mrcUrl/trcUrl` 已不在搜索元数据里，把明文 LRC 喂给 TEA 解密会抛
+   `Cannot convert 0x[00:01.00]… to a BigInt`。所以解密前先做"是否像十六进制密文"的格式判别。
+
+另外两个"单位/统计"坑（同样有回归锁）：
+
+- **酷狗候选时长是毫秒**（实测 210000/269792…），而 `interval`（"04:29"）算出的是**秒**。
+  早期把秒和毫秒比，评分退化成"永远挑最短的候选"——有片段/Live 候选时会拿到**别的版本**的歌词；
+  现在统一成毫秒（`getTimeLengthMs`），`timelength` 查询参数跟着同一单位。
+- **空 krc 内容必须 reject**：`new Promise` 里 `return`（不 settle）会让 `await` 永远挂住，
+  窗口一直"正在获取歌词…"且失败不进缓存。
+
+### 7.2 系统媒体控件（SMTC / 媒体键）
+
+背景：DSH 的 Web GUI 跑在 Electron（本机实测 Electron 44 / Chromium 152）里，页面标题由
+`dsh-client-ui-layout` 设成 `<会话名> — DeepSeek Harness`；插件用裸 `new Audio()` 放歌又没有设置
+MediaSession 元数据，于是 Chromium 把**页面标题当默认元数据**推给系统面板 —— 用户看到的就是
+"会话名"。修法是 `src/ui/mediaSession.ts`：把权威播放状态翻译成
+`navigator.mediaSession.metadata / playbackState / setPositionState / setActionHandler`。
+
+几条必须守住的约束：
+
+- **没有曲目时也要写 metadata**（标题回落成 `LX Music`）：一旦 metadata 为空，Chromium 会用
+  `document.title` 兜底，会话名就会重新出现（`TitleWasSet` 每次都重推默认元数据）。
+- **`setPositionState` 的值必须合法**（`duration` 有限正数、`0 ≤ position ≤ duration`）：
+  它既会抛 `TypeError`，非法调用的空路径还会 `ClearAllMetadata()` 把刚写好的歌名清掉。
+  所以先校验再调用，并按 1s 节流。
+- **`setActionHandler` 逐个 try/catch**：不同内核支持的动作集合不同，一个不支持不能拖垮其余。
+- **`play`/`pause` 不能走 toggle**：面板在"本来就在播"时也会发 `play`，toggle 会把它变成暂停
+  （`LxStore.play()/pause()` 因而先看当前 status）。
+- 封面由浏览器自己抓（W3C 规定 `no-cors` + 带 cookie），不需要 CORS；`sizes` 必须写，
+  且按平台 URL 规律派生小图（`coverArtwork()`）能避免为缩略图下载大图。
+- **系统面板没有回读 API**：所以桥把"到底推了什么"记进 `SmtcStatus`，显示在歌词窗口底部；
+  排查"SMTC 还是显示会话名"时先看那一行（`supported / title / artworkPushed / playbackState / note`）。
+

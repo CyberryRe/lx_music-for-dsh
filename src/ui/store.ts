@@ -5,6 +5,8 @@
 
 import type {
   AddPosition,
+  LyricDoc,
+  SmtcStatus,
   MemoryConfigView,
   MusicInfo,
   PlayMode,
@@ -45,6 +47,8 @@ export interface LxRemote {
   exportList(): Promise<string>
   search(req: SearchRequest): Promise<SearchOutcome>
   resolveUrl(req: { music: MusicInfo; quality?: Quality }): Promise<{ url: string; type: Quality; sourceName?: string }>
+  /** 歌词（host 解析好的结构化文档；拿不到时返回带 note 的空文档，不 reject）。 */
+  getLyric(req: { music: MusicInfo }): Promise<LyricDoc>
   listSources(): Promise<SourceEntry[]>
   validateSource(script: string): Promise<{ valid: boolean; error?: string; sources?: string[] }>
   uploadSource(filename: string, content: string): Promise<{ success: boolean; id?: string; error?: string }>
@@ -74,6 +78,13 @@ export interface StoreSnapshot {
   tasteOnboarding: boolean
   tasteBusy: boolean
   tasteNotice: string | null
+  /** 歌词窗口（1.3.0）。 */
+  lyricsOpen: boolean
+  lyric: LyricDoc | null
+  lyricLoading: boolean
+  lyricError: string | null
+  /** 系统媒体控件（SMTC）自检状态（1.3.0；由 MediaSessionBridge 推入）。 */
+  smtc: SmtcStatus | null
   loading: boolean
   error: string | null
   connected: boolean
@@ -106,6 +117,11 @@ export class LxStore {
     tasteOnboarding: false,
     tasteBusy: false,
     tasteNotice: null,
+    lyricsOpen: false,
+    lyric: null,
+    lyricLoading: false,
+    lyricError: null,
+    smtc: null,
     loading: false,
     error: null,
     connected: false,
@@ -144,6 +160,15 @@ export class LxStore {
   private errorRetry = new Map<string, number>()
   /** 错误重试表的容量上限（超过按最旧淘汰，避免长时间会话无界增长）。 */
   private static readonly ERROR_RETRY_MAX = 200
+  /**
+   * 歌词的**代数**：与直链的 `loadGen` 同一个套路 —— 换歌后旧请求返回时直接丢弃，
+   * 否则会出现"窗口显示新歌名、歌词还是上一首"。
+   */
+  private lyricGen = 0
+  /** 最近一次取词的曲目键（`平台|id`）；同一首不重复取（除非 force）。 */
+  private lyricKey = ''
+  /** 音量操作的代数（键盘连按会并发，迟到的响应不能把音量倒回去）。 */
+  private volumeGen = 0
   private started = false
 
   constructor(remote: LxRemote) {
@@ -317,6 +342,7 @@ export class LxStore {
 
   /** 状态同步入口：需要"换到另一份流"才重新解析直链，否则只跟随播放/暂停。 */
   private syncState(state: PlayerState): void {
+    this.maybeRefreshLyric(state)
     const requested = trackKey(state.current, state.quality)
     // 同一份流不重复解析；刚失败过的那首也不自动重试（等 host 切歌或用户再点一次）
     const needsStream = requested !== '' && requested !== this.loadedKey && requested !== this.failedKey
@@ -458,6 +484,39 @@ export class LxStore {
     }
   }
 
+  /**
+   * 「播放」（系统媒体面板 / 硬件媒体键 / 歌词窗口）。
+   *
+   * 刻意**不用 toggle**：面板发来的 `play` 事件在"本来就在播"时也会触发，
+   * toggle 会把它当成"暂停"，表现为"按一下媒体键反而停了"。
+   */
+  async play(): Promise<void> {
+    if (this.snapshot.state?.status === 'playing') return
+    await this.togglePlay()
+  }
+
+  /** 「暂停」：只在确实在播时切换（理由同上）。 */
+  async pause(): Promise<void> {
+    if (this.snapshot.state?.status !== 'playing') return
+    await this.togglePlay()
+  }
+
+  /** 「停止」：暂停并回到开头（系统媒体面板的 stop）。 */
+  async stop(): Promise<void> {
+    await this.pause()
+    await this.seek(0)
+  }
+
+  /** 相对跳转（系统媒体面板的快进/快退，默认 ±10s）。 */
+  async seekBy(delta: number): Promise<void> {
+    const st = this.snapshot.state
+    const current = this.audio?.currentTime ?? st?.progress ?? 0
+    const duration = this.audio?.duration || st?.duration || 0
+    const raw = current + delta
+    const target = duration > 0 ? Math.min(duration, Math.max(0, raw)) : Math.max(0, raw)
+    await this.seek(target)
+  }
+
   async next(): Promise<void> {
     try {
       const st = await this.remote.next()
@@ -540,14 +599,56 @@ export class LxStore {
     return this.remote.exportList()
   }
 
+  /**
+   * 音量拖动中的**本地预览**：只改 audio 与本地快照，不发 remote。
+   *
+   * 拖动期间 `change` 事件会连续触发，逐次打 remote 会在几百毫秒里塞几十个 RPC
+   * （而且 host 每次都会 bump 版本、触发全量轮询）。提交在 pointerup/keyup 时做。
+   * 另外：静音状态下拖动 = 用户想听见声音，本地先解除静音。
+   */
+  previewVolume(volume: number): void {
+    const v = Math.min(1, Math.max(0, volume))
+    if (this.audio) this.audio.volume = v
+    const st = this.snapshot.state
+    if (st) this.patch({ state: { ...st, volume: v, mute: v > 0 ? false : st.mute } })
+  }
+
+  /** 提交音量（拖动结束/键盘调整）：顺带解除静音并同步 host。 */
   async setVolume(volume: number): Promise<void> {
-    if (this.audio) this.audio.volume = volume
+    const v = Math.min(1, Math.max(0, volume))
+    if (this.audio) this.audio.volume = v
+    // 代数守卫：键盘连按会并发多个 setVolume，迟到的响应不能把音量倒回旧值
+    const gen = ++this.volumeGen
     try {
-      const st = await this.remote.setVolume(volume)
-      this.applyState(st)
-    } catch {
-      // 忽略
+      const st = await this.remote.setVolume(v)
+      // 音量调到非 0 却还处于静音 → 一并解除（否则用户会看到"音量条有值但没声音"）
+      const next = v > 0 && st.mute ? await this.remote.setMute(false) : st
+      if (gen !== this.volumeGen) return
+      if (this.audio) this.audio.volume = next.mute ? 0 : next.volume
+      this.applyState(next)
+    } catch (err) {
+      if (gen !== this.volumeGen) return
+      this.patch({ error: err instanceof Error ? err.message : String(err) })
     }
+  }
+
+  /** 静音开关：audio 立即生效（不等 remote 往返）。 */
+  async setMute(mute: boolean): Promise<void> {
+    if (this.audio) this.audio.volume = mute ? 0 : (this.snapshot.state?.volume ?? 1)
+    const gen = ++this.volumeGen
+    try {
+      const st = await this.remote.setMute(mute)
+      if (gen !== this.volumeGen) return
+      if (this.audio) this.audio.volume = st.mute ? 0 : st.volume
+      this.applyState(st)
+    } catch (err) {
+      if (gen !== this.volumeGen) return
+      this.patch({ error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  async toggleMute(): Promise<void> {
+    await this.setMute(!(this.snapshot.state?.mute ?? false))
   }
 
   async setQuality(quality: Quality): Promise<void> {
@@ -694,6 +795,83 @@ export class LxStore {
       this.patch({ tasteBusy: false, tasteNotice: `保存失败：${message}` })
       return null
     }
+  }
+
+  // ── 歌词（1.3.0） ─────────────────────────────────────────────────────────
+
+  openLyrics(): void {
+    this.patch({ lyricsOpen: true })
+    void this.refreshLyric()
+  }
+
+  closeLyrics(): void {
+    this.patch({ lyricsOpen: false })
+  }
+
+  /** 手动重取（歌词窗口上的「刷新」）：绕过"同一首不重复取"。 */
+  async reloadLyric(): Promise<void> {
+    await this.refreshLyric(true)
+  }
+
+  /**
+   * 取当前曲目的歌词（host 解析好的结构化文档）。
+   *
+   * 与直链加载同样用"代数"防竞态：换歌后旧请求返回时整段丢弃，否则会出现
+   * "窗口标题是新歌、歌词还是上一首"。
+   */
+  async refreshLyric(force = false): Promise<void> {
+    const music = this.snapshot.state?.current ?? null
+    if (!music) {
+      this.patch({ lyric: null, lyricLoading: false, lyricError: '没有正在播放的歌曲' })
+      return
+    }
+    const key = `${music.source}|${music.id}`
+    if (!force && key === this.lyricKey && this.snapshot.lyric) return
+    const keyChanged = key !== this.lyricKey
+    this.lyricKey = key
+    const gen = ++this.lyricGen
+    // 换歌时必须**先清掉上一首的歌词**：窗口标题/角标来自 state.current，不清掉就会出现
+    // "新歌名 + 旧歌词"，而代数守卫只能挡"迟到的响应"（旧文档早就渲染出去了）。
+    // 同一首手动刷新（key 未变）则保留旧内容，避免整窗闪白。
+    this.patch({ lyricLoading: true, lyricError: null, ...(keyChanged ? { lyric: null } : {}) })
+    try {
+      const doc = await this.remote.getLyric({ music })
+      if (gen !== this.lyricGen) return
+      // 拿不到歌词时 host 返回的是带 note 的空文档：这里保留 doc，让 UI 展示 note
+      this.patch({ lyric: doc, lyricLoading: false, lyricError: null })
+    } catch (err) {
+      if (gen !== this.lyricGen) return
+      this.patch({ lyric: null, lyricLoading: false, lyricError: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** 换歌时自动重取（仅在歌词窗口打开时；由 syncState 调用）。 */
+  private maybeRefreshLyric(state: PlayerState): void {
+    if (!this.snapshot.lyricsOpen) return
+    const music = state.current
+    if (!music) return
+    if (`${music.source}|${music.id}` === this.lyricKey) return
+    void this.refreshLyric()
+  }
+
+  // ── 系统媒体控件（SMTC）自检状态 ──────────────────────────────────────────
+
+  /**
+   * MediaSessionBridge 推入的自检状态。
+   *
+   * 必须做等值去重：桥订阅了 store，写回会再次触发 `sync()`；不去重会与桥的
+   * `pushStatus` 去重叠加成空转（虽然桥已去重，这里再挡一层，UI 也不会白重渲染）。
+   */
+  setSmtcStatus(status: SmtcStatus): void {
+    const prev = this.snapshot.smtc
+    if (prev
+      && prev.supported === status.supported
+      && prev.title === status.title
+      && prev.artist === status.artist
+      && prev.artwork === status.artwork
+      && prev.playbackState === status.playbackState
+      && prev.note === status.note) return
+    this.patch({ smtc: status })
   }
 
   clearError(): void {

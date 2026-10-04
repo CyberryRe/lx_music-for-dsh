@@ -16,13 +16,13 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 /** 插件版本：必须与 package.json 一致（tests/activation.test.ts 锁住）。 */
-export const PLUGIN_VERSION = '1.2.3'
+export const PLUGIN_VERSION = '1.3.0'
 
 /** 状态文件里的一次激活记录（同一进程内多次调用会保留历史，便于观察重试/热重载）。 */
 export interface PluginStatusRecord {
   at: string
   pid: number
-  phase: 'enter' | 'music-ready' | 'storage-ready' | 'ready' | 'failed'
+  phase: 'enter' | 'storage-ready' | 'ready' | 'failed'
   /** 关键服务在进入 apply 时是否可见（用于区分"依赖没就绪"与"代码出错"）。 */
   services?: Record<string, boolean>
   /** durable=已挂载存储；memory=存储不可用；pending=还没走到。 */
@@ -85,9 +85,4 @@ export function recordStatus(patch: Omit<PluginStatusRecord, 'at' | 'pid'>): voi
   } catch {
     // 诊断失败不影响插件
   }
-}
-
-/** 便于宿主/测试查看当前状态文件路径（also used by docs）。 */
-export function describeStatusFile(): string {
-  return statusFilePath()
 }

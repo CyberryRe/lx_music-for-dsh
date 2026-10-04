@@ -1,4 +1,5 @@
-﻿import { formatPlayTime, sizeFormate } from '../utils'
+// 移植自 lx-music-desktop musicSdk（Apache-2.0）：tx（QQ音乐）搜索。仅搜索路径，未改动算法。
+import { formatPlayTime, sizeFormate } from '../utils'
 import { formatSingerName } from '../utils'
 import { signRequest } from './utils'
 

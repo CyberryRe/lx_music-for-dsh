@@ -1,3 +1,4 @@
+// 移植自 lx-music-desktop musicSdk（Apache-2.0）：tx zzcSign 签名算法。
 import crypto from 'node:crypto'
 
 const PART_1_INDEXES = [23, 14, 6, 36, 16, 40, 7, 19]

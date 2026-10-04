@@ -9,6 +9,7 @@
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { MusicInfo, PlayLogEntry, Quality } from '../shared/types'
+import { MUSIC_SOURCES } from '../shared/types'
 import type { PlaybackService } from '../playback'
 import { explicitDelta } from './events'
 import { EXPLORE_COOLDOWN_DAYS, EXPLORE_MAX_CANDIDATES, EXPLORE_MAX_SEEDS, rankUnheardCandidates } from './explore'
@@ -23,7 +24,7 @@ export interface TasteToolsOptions {
   store: TasteStore
   memory: MemoryConfig
   now?: () => number
-  /** 画像工具每滑动窗口（1 小时）的调用上限；0 表示不限。 */
+  /** 点歌日志出口（index.ts 写进 storage 的 logs 表；画像未开启时上游会门控掉）。 */
   onLog?: (entry: PlayLogEntry) => void
 }
 
@@ -36,7 +37,6 @@ const BUDGET_PROFILE = {
 } as const
 
 const REASON_MAX = 12
-const SOURCES = ['kw', 'wy', 'kg', 'tx', 'mg']
 const VARIANTS = ['original', 'live', 'cover', 'instrumental', 'remix', 'unknown']
 
 function trimReason(text: string, enabled: boolean): string {
@@ -308,7 +308,7 @@ function buildPlaySongTool(options: TasteToolsOptions): ReturnType<typeof define
       '确认不到会明确失败并给出候选，绝不会拿翻唱或别的版本顶替。' +
       'mode=explore 表示这是"没听过的探索"（负反馈会计入但打折）。',
     parameters: {
-      source: { type: 'string', enum: SOURCES, description: '平台（配合 id 使用，走零搜索直取）。' },
+      source: { type: 'string', enum: MUSIC_SOURCES, description: '平台（配合 id 使用，走零搜索直取）。' },
       id: { type: 'string', description: '平台曲目 id（配合 source 使用）。' },
       title: { type: 'string', description: '曲名（与 id 二选一）。' },
       artist: { type: 'string', description: '歌手（强烈建议与 title 一起给）。' },

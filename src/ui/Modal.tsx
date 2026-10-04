@@ -41,8 +41,7 @@ export function DraggableWindow(props: DraggableWindowProps): JSX.Element {
     }
     return DEFAULT_BOUNDS
   })
-  const ref = useRef<HTMLDivElement | null>(null)
-  const dragState = useRef<{ mode: 'move' | 'resize'; startX: number; startY: number; startBounds: Bounds } | null>(null)
+  const dragState = useRef<{ mode: 'move' | 'resize'; startX: number; startY: number } | null>(null)
 
   useEffect(() => {
     const onMove = (e: PointerEvent): void => {
@@ -82,12 +81,12 @@ export function DraggableWindow(props: DraggableWindowProps): JSX.Element {
 
   const onPointerDown = (mode: 'move' | 'resize') => (e: React.PointerEvent): void => {
     if (e.button !== 0) return
-    dragState.current = { mode, startX: e.clientX, startY: e.clientY, startBounds: bounds }
+    dragState.current = { mode, startX: e.clientX, startY: e.clientY }
     e.preventDefault()
   }
 
   return (
-    <div className="lxm-window" ref={ref} style={{ left: bounds.x, top: bounds.y, width: bounds.w, height: bounds.h }} role="dialog" aria-label={title}>
+    <div className="lxm-window" style={{ left: bounds.x, top: bounds.y, width: bounds.w, height: bounds.h }} role="dialog" aria-label={title}>
       <div className="lxm-window-titlebar" onPointerDown={onPointerDown('move')}>
         <span className="lxm-window-title">{title}</span>
         <button type="button" className="lxm-window-close" aria-label="关闭" onClick={onClose}>✕</button>

@@ -1,4 +1,5 @@
-﻿// import '../../polyfill/array.find'
+// 移植自 lx-music-desktop musicSdk（Apache-2.0）：kw（酷我）搜索。仅搜索路径，未改动算法。
+// import '../../polyfill/array.find'
 
 import { httpFetch } from '../request'
 import { formatPlayTime, decodeName } from '../utils'

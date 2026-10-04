@@ -116,6 +116,8 @@ export const LXP_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
     // 搜索与直链
     desc('search', [jsonParam('req', looseObject)]),
     desc('resolveUrl', [jsonParam('req', looseObject)]),
+    // 歌词（1.3.0）
+    desc('getLyric', [jsonParam('req', looseObject)]),
     // 音源管理
     desc('listSources'),
     desc('validateSource', [jsonParam('script', () => z.string())]),

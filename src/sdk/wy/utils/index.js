@@ -1,4 +1,5 @@
-﻿import { httpFetch } from '../../request'
+// 移植自 lx-music-desktop musicSdk（Apache-2.0）：wy 请求封装（eapi）。
+import { httpFetch } from '../../request'
 import { eapi } from './crypto'
 
 export const eapiRequest = (url, data) => {

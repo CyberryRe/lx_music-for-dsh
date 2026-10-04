@@ -8,6 +8,7 @@ import tx from './tx/musicSearch.js'
 import wy from './wy/musicSearch.js'
 import mg from './mg/musicSearch.js'
 import type { MusicInfo, MusicSource, Quality, SearchOutcome } from '../shared/types'
+import { DEFAULT_PLATFORM_PRIORITY } from '../shared/types'
 import { jsonSafe } from '../shared/json'
 import type { SdkMusicItem, SdkSearchResult } from './musicSearch.d'
 
@@ -20,15 +21,6 @@ const PLATFORMS: Array<{ id: MusicSource; module: SdkModule }> = [
   { id: 'kw', module: kw as unknown as SdkModule },
   { id: 'mg', module: mg as unknown as SdkModule },
 ]
-
-/** 各平台直链能力声明（当前版本与 lx-music-desktop 一致：无内置直链，由音源脚本提供）。 */
-export const SDK_BUILTIN_URL_SUPPORT: Partial<Record<MusicSource, boolean>> = {
-  wy: false,
-  tx: false,
-  kg: false,
-  kw: false,
-  mg: false,
-}
 
 /** 旧版 SDK 条目 → 插件 MusicInfo（经 jsonSafe 清洗，避免 undefined 字段触发 gateway 边界校验）。 */
 export function sdkItemToMusicInfo(item: SdkMusicItem): MusicInfo {
@@ -49,6 +41,11 @@ export function sdkItemToMusicInfo(item: SdkMusicItem): MusicInfo {
       copyrightId: item.copyrightId,
       strMediaMid: item.strMediaMid,
       albumMid: item.albumMid,
+      // 咪咕的歌词直链随搜索结果一起下发（1.3.0 歌词链路要用）：
+      // 之前这里漏了这三个字段，导致"拿到歌却拿不到歌词"。
+      lrcUrl: item.lrcUrl ?? undefined,
+      mrcUrl: item.mrcUrl ?? undefined,
+      trcUrl: item.trcUrl ?? undefined,
     },
   })
 }
@@ -67,7 +64,7 @@ export async function searchWithPriority(
   query: string,
   options: { sources?: MusicSource[]; limit?: number; page?: number } = {},
 ): Promise<SearchOutcome> {
-  const sources = options.sources && options.sources.length > 0 ? options.sources : (PLATFORMS.map((p) => p.id) as MusicSource[])
+  const sources = options.sources && options.sources.length > 0 ? options.sources : DEFAULT_PLATFORM_PRIORITY
   const attempts: SearchOutcome['attempts'] = []
   for (const source of sources) {
     try {

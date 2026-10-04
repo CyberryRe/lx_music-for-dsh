@@ -5,16 +5,8 @@ import { useState, useSyncExternalStore } from 'react'
 import type { LxStore } from './store'
 import type { DraggableWindowProps } from './Modal'
 import type { MusicInfo, MusicSource } from '../shared/types'
+import { SOURCE_LABEL, sourceLabel } from '../shared/types'
 import { PLAY_MODES } from './playModes'
-
-const SOURCE_LABEL: Record<string, string> = {
-  kw: '酷我',
-  wy: '网易云',
-  kg: '酷狗',
-  tx: 'QQ音乐',
-  mg: '咪咕',
-  local: '本地',
-}
 
 export interface MainWindowProps {
   store: LxStore
@@ -142,7 +134,7 @@ export function LxMainWindow(props: MainWindowProps): JSX.Element {
                 {m.meta.picUrl ? <img className="lxm-row-cover" src={m.meta.picUrl} alt="" loading="lazy" /> : <div className="lxm-row-cover" />}
                 <div className="lxm-row-main">
                   <div className="lxm-row-name">{m.name}</div>
-                  <div className="lxm-row-sub">{m.singer} · {SOURCE_LABEL[m.source] ?? m.source}</div>
+                  <div className="lxm-row-sub">{m.singer} · {sourceLabel(m.source)}</div>
                 </div>
                 <div style={{ display: 'flex', gap: 3, flex: 'none', maxWidth: 120, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   {(m.meta.qualitys ?? []).slice(0, 3).map((q) => (
@@ -215,7 +207,7 @@ export function LxMainWindow(props: MainWindowProps): JSX.Element {
                 {m.meta.picUrl ? <img className="lxm-row-cover" src={m.meta.picUrl} alt="" loading="lazy" /> : <div className="lxm-row-cover" />}
                 <div className="lxm-row-main">
                   <div className="lxm-row-name">{m.name}</div>
-                  <div className="lxm-row-sub">{m.singer} · {SOURCE_LABEL[m.source] ?? m.source}</div>
+                  <div className="lxm-row-sub">{m.singer} · {sourceLabel(m.source)}</div>
                 </div>
                 <span className="lxm-dur">{m.interval ?? ''}</span>
                 <button

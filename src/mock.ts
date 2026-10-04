@@ -3,6 +3,8 @@
 // 直链为示例音频 URL（可播放的样例音频）。
 
 import type { MusicInfo, MusicSource, MusicUrlResult, Quality, SearchOutcome } from './shared/types'
+import { DEFAULT_PLATFORM_PRIORITY } from './shared/types'
+import type { RawLyricPayload } from './shared/lrc'
 
 interface MockSongSeed {
   name: string
@@ -94,7 +96,7 @@ export class MockProvider {
     options: { sources?: MusicSource[]; singer?: string; limit?: number } = {},
   ): Promise<SearchOutcome> {
     await this.delay()
-    const sources: MusicSource[] = options.sources && options.sources.length > 0 ? options.sources : ['wy', 'tx', 'kg', 'kw', 'mg']
+    const sources: MusicSource[] = options.sources && options.sources.length > 0 ? options.sources : DEFAULT_PLATFORM_PRIORITY
     const attempts: SearchOutcome['attempts'] = []
     const seen = new Set<string>()
     const results: MusicInfo[] = []
@@ -124,6 +126,50 @@ export class MockProvider {
       type: quality,
       sourceName: 'mock',
       attempts: [{ name: 'mock', status: 'success', message: `mock 解析 ${quality}` }],
+    }
+  }
+
+  /**
+   * 歌词：生成一份**带逐字时间轴**的演示歌词。
+   *
+   * 演示数据也要覆盖逐字高亮，否则"滚动歌词 + 卡拉OK"这条链路在 mock 模式下完全不可见
+   * （而那正是没网/没音源时唯一的自检手段）。
+   */
+  async getLyric(music: MusicInfo): Promise<RawLyricPayload> {
+    await this.delay()
+    const texts = [
+      '（内置演示歌词）',
+      `${music.name} - ${music.singer}`,
+      '这一行用来验证滚动歌词会自动居中',
+      '这一行用来验证逐字高亮（卡拉OK）',
+      '把鼠标移到某一行上可以直接跳转到那一段',
+      '打开右上角「译」可以显示翻译行',
+    ]
+    const stepSeconds = 6
+    const fmt = (total: number): string => {
+      const m = Math.floor(total / 60)
+      const s = total % 60
+      return `${String(m).padStart(2, '0')}:${s.toFixed(3).padStart(6, '0')}`
+    }
+    const wordTimed = (text: string, durMs: number): string => {
+      const chars = [...text]
+      const step = Math.max(1, Math.floor(durMs / Math.max(1, chars.length)))
+      return chars.map((c, i) => `<${i * step},${step}>${c}`).join('')
+    }
+    const lyricLines: string[] = ['[ti:演示歌词]', '[ar:lx-music-for-dsh]']
+    const lxLines: string[] = []
+    const tlLines: string[] = []
+    texts.forEach((text, i) => {
+      const at = i * stepSeconds
+      lyricLines.push(`[${fmt(at)}]${text}`)
+      lxLines.push(`[${fmt(at)}]${wordTimed(text, stepSeconds * 1000)}`)
+      tlLines.push(`[${fmt(at)}]demo lyric line ${i + 1}`)
+    })
+    return {
+      lyric: lyricLines.join('\n'),
+      lxlyric: lxLines.join('\n'),
+      tlyric: tlLines.join('\n'),
+      format: 'lxlyric',
     }
   }
 }

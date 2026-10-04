@@ -79,13 +79,19 @@ export const CSS = `/* ── 实验性功能警示（音乐画像默认关闭�
   font-size: 11px; color: var(--dsw-alias-label-tertiary, #999);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* 报错信息单独一行：换行而不是撑宽卡片，最多两行，完整内容在 title 里。 */
+/* 报错信息单独一行：换行而不是撑宽容器，最多两行，完整内容在 title 里。
+   ⚠️ 全仓库只有这一处 .lxm-error 定义，卡片（Card）与窗口（MainWindow）共用它。
+   这里曾经有第二条同选择器的规则（在文件后半段），两条规则按属性互相覆盖，
+   读代码时无法直接看出最终样式，改任一条都可能静默影响另一处。
+   新增样式请改这一处，不要再写第二条 .lxm-error。 */
 .lxm-error {
-  font-size: 11px; line-height: 1.4;
-  color: var(--dsw-alias-state-error-primary, #f56c6c);
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #f56c6c) 10%, transparent);
-  border-radius: 6px;
-  padding: 4px 6px;
+  flex: none;
+  font-size: 12px; line-height: 1.4;
+  color: #ff7b72;
+  background: color-mix(in srgb, #ff7b72 10%, transparent);
+  border: 1px solid color-mix(in srgb, #ff7b72 30%, transparent);
+  border-radius: 8px;
+  padding: 6px 10px;
   min-width: 0; max-width: 100%;
   overflow-wrap: anywhere; word-break: break-word;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -95,6 +101,67 @@ export const CSS = `/* ── 实验性功能警示（音乐画像默认关闭�
   flex: 1; margin: 0; height: 4px; cursor: pointer;
   accent-color: var(--dsw-alias-state-business-primary, #4c8dff);
 }
+/* 音量（1.3.0）：二级面板 = 一根竖滑块，点喇叭后向上弹出。
+   ⚠️ 这里**必须**是 position: fixed —— 面板由 VolumePopover 用 portal 挂到 <body>，
+   因为卡片 .lxm-card 有 overflow: hidden（可压缩容器，不能去掉）。只要面板还留在
+   卡片内部，溢出部分就会被裁掉，z-index 再大都没用（裁剪先于合成发生）。
+   面板里只有一根滑块（没有数值、没有喇叭按钮），所以走极简样式：细轨道 + 圆点。
+   top/right 由组件按按钮矩形实时算（含"上方放不下就翻到下面"），这里只负责外观。 */
+.lxm-volume-pop {
+  position: fixed; z-index: 10040;
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 9px 6px;
+  background: var(--dsw-specific-sidebar-fill, #1e1e1e);
+  border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25));
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+/* 翻到按钮下方时，箭头指回上面的按钮 */
+.lxm-volume-pop::after {
+  content: ""; position: absolute; left: 50%; bottom: -5px;
+  width: 8px; height: 8px; margin-left: -4px;
+  background: inherit;
+  border-right: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25));
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25));
+  transform: rotate(45deg);
+}
+.lxm-volume-pop[data-flip="true"]::after {
+  top: -5px; bottom: auto;
+  border-right: none; border-bottom: none;
+  border-left: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25));
+  border-top: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25));
+}
+/* 竖滑块：writing-mode 是标准做法（Chrome 111+ / Firefox / Safari）。
+   direction: rtl 让**上端 = 100%**；否则竖着的 range 会变成"上面是 0"。
+   轨道用渐变画：蓝=已设音量，灰=剩余，滑块只留一个圆点。 */
+.lxm-volume-pop input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  writing-mode: vertical-lr; direction: rtl;
+  width: 16px; height: 96px; margin: 0; padding: 7px 0; cursor: pointer;
+  background: transparent;
+  --lxm-fill: var(--dsw-alias-state-business-primary, #4c8dff);
+}
+.lxm-volume-pop input[type="range"]::-webkit-slider-runnable-track {
+  width: 4px; height: 100%; border-radius: 2px;
+  background: linear-gradient(to top, var(--lxm-fill) calc(var(--lxm-vol) * 1%), var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.3)) 0);
+}
+.lxm-volume-pop input[type="range"]::-moz-range-track {
+  width: 4px; height: 100%; border-radius: 2px;
+  background: linear-gradient(to top, var(--lxm-fill) calc(var(--lxm-vol) * 1%), var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.3)) 0);
+}
+.lxm-volume-pop input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 12px; height: 12px; margin-left: -4px; border-radius: 50%;
+  background: var(--dsw-alias-label-primary, #e6e6e6);
+  border: none; cursor: pointer;
+}
+.lxm-volume-pop input[type="range"]::-moz-range-thumb {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--dsw-alias-label-primary, #e6e6e6);
+  border: none; cursor: pointer;
+}
+.lxm-volume-pop input[type="range"]:hover::-webkit-slider-thumb { background: #fff; }
+.lxm-volume-pop input[type="range"]:hover::-moz-range-thumb { background: #fff; }
 .lxm-time { font-size: 10px; color: var(--dsw-alias-label-tertiary, #999); font-variant-numeric: tabular-nums; }
 .lxm-controls { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 .lxm-btn {
@@ -116,7 +183,9 @@ export const CSS = `/* ── 实验性功能警示（音乐画像默认关闭�
   border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.2));
   border-radius: 6px;
 }
-.lxm-btn-row { display: flex; gap: 2px; }
+/* 间距 3px + 显式居中：喇叭按钮里是 SVG，不居中会随行高漂移。
+   音量面板已经 portal 到 body，不再受这一行的间距影响。 */
+.lxm-btn-row { display: flex; align-items: center; gap: 3px; }
 .lxm-modes {
   display: inline-flex; gap: 2px; padding: 2px; flex: none;
   background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.08));
@@ -133,11 +202,6 @@ export const CSS = `/* ── 实验性功能警示（音乐画像默认关闭�
   background: var(--dsw-alias-state-business-primary, #4c8dff); color: #fff;
 }
 
-.lxm-overlay {
-  position: fixed; inset: 0; z-index: 9999;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex; align-items: center; justify-content: center;
-}
 .lxm-window {
   position: fixed; z-index: 10000; display: flex; flex-direction: column;
   background: var(--dsw-specific-sidebar-fill, #1e1e1e);
@@ -209,10 +273,6 @@ export const CSS = `/* ── 实验性功能警示（音乐画像默认关闭�
 .lxm-empty { color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; text-align: center; padding: 24px 0; }
 .lxm-toolbar { display: flex; gap: 6px; align-items: center; flex: none; flex-wrap: wrap; }
 .lxm-toolbar .lxm-btn { width: auto; padding: 4px 10px; font-size: 12px; border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.2)); border-radius: 6px; }
-.lxm-error {
-  flex: none; font-size: 12px; color: #ff7b72; background: color-mix(in srgb, #ff7b72 10%, transparent);
-  border: 1px solid color-mix(in srgb, #ff7b72 30%, transparent); border-radius: 8px; padding: 6px 10px;
-}
 .lxm-drag-handle { cursor: grab; color: var(--dsw-alias-label-tertiary, #666); font-size: 12px; flex: none; padding: 0 2px; }
 .lxm-dragging { opacity: 0.4; }
 .lxm-drop-hint { border-top: 2px solid var(--dsw-alias-state-business-primary, #4c8dff); }
@@ -244,4 +304,61 @@ export const CSS = `/* ── 实验性功能警示（音乐画像默认关闭�
 .lxm-prio-item { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 4px; border-radius: 6px; }
 .lxm-prio-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.1)); }
 .lxm-section-title { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary, #bbb); margin: 4px 0 0; }
+
+/* ── 滚动歌词窗口（1.3.0）───────────────────────────────────────────────── */
+.lxm-spacer { flex: 1; }
+.lxm-btn-text[data-active="true"] {
+  color: var(--dsw-alias-state-business-primary, #4c8dff);
+  border-color: var(--dsw-alias-state-business-primary, #4c8dff);
+}
+.lxm-lyric-toolbar { flex-wrap: wrap; }
+.lxm-lyric-song {
+  font-size: 12px; color: var(--dsw-alias-label-secondary, #bbb);
+  max-width: 42%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lxm-lyric-body {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 4px 10px;
+  display: flex; flex-direction: column; gap: 2px;
+  /* 歌词是"扫一眼就能读"的内容：行高放宽，滚动时不做字重突变，避免视觉跳动 */
+  line-height: 1.7; scrollbar-gutter: stable;
+}
+/* 上下留白：让第一句/最后一句也能滚到视觉中心 */
+.lxm-lyric-pad { flex: none; height: 45%; }
+.lxm-lyric-line {
+  flex: none; padding: 5px 8px; border-radius: 8px; cursor: pointer;
+  color: var(--dsw-alias-label-tertiary, #999);
+  transition: color 0.15s, background 0.15s;
+  min-width: 0; overflow-wrap: anywhere;
+}
+.lxm-lyric-line:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.1)); }
+.lxm-lyric-line[data-past="true"] { color: var(--dsw-alias-label-secondary, #bbb); }
+.lxm-lyric-line[data-active="true"] {
+  color: var(--dsw-alias-label-primary, #e6e6e6);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4c8dff) 12%, transparent);
+}
+.lxm-lyric-text { display: block; }
+.lxm-lyric-word {
+  color: var(--dsw-alias-label-secondary, #bbb);
+  transition: color 0.12s;
+}
+.lxm-lyric-line[data-active="true"] .lxm-lyric-word[data-on="true"] {
+  color: var(--dsw-alias-state-business-primary, #4c8dff);
+}
+.lxm-lyric-line[data-active="true"] .lxm-lyric-word[data-current="true"] {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4c8dff) 60%, transparent);
+}
+.lxm-lyric-tr {
+  display: block; font-size: 0.82em; font-weight: 400;
+  color: var(--dsw-alias-label-tertiary, #999);
+}
+.lxm-lyric-ro {
+  display: block; font-size: 0.78em; font-weight: 400;
+  color: var(--dsw-alias-label-tertiary, #888); opacity: 0.85;
+}
+.lxm-lyric-foot {
+  flex: none; padding: 6px 12px;
+  border-top: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.15));
+  min-width: 0; overflow-wrap: anywhere;
+}
 `

@@ -9,7 +9,10 @@ import { LxClient } from './lxclient'
 import { MockProvider } from './mock'
 import { EngineProvider } from './engine/musicEngine'
 import type { StorageFace } from './playback'
+import type { LyricFetch } from './sdk/lyric'
+import type { RawLyricPayload } from './shared/lrc'
 import type { MusicInfo, MusicSource, MusicUrlResult, Quality, SearchOutcome, SearchRequest, SourceEntry } from './shared/types'
+import { DEFAULT_PLATFORM_PRIORITY, MUSIC_SOURCES } from './shared/types'
 
 export type ProviderMode = 'auto' | 'engine' | 'lxserver' | 'mock'
 
@@ -18,6 +21,11 @@ export interface Provider {
   ping(): Promise<boolean>
   search(req: SearchRequest): Promise<SearchOutcome>
   resolveUrl(music: MusicInfo, quality: Quality): Promise<MusicUrlResult>
+  /**
+   * 歌词（1.3.0）。返回**原始歌词文本**（未解析成行），解析在 `shared/lrc.ts` 里做。
+   * 拿不到时抛错（由 PlaybackService 收敛成带 note 的空 LyricDoc，不向 UI 抛异常）。
+   */
+  getLyric(music: MusicInfo): Promise<LyricFetch>
   listSources(): Promise<SourceEntry[]>
   validateSource(script: string): Promise<unknown>
   uploadSource(filename: string, content: string): Promise<{ success: boolean; id?: string; error?: string }>
@@ -41,7 +49,7 @@ export class LxProviderFacade implements Provider {
   }
 
   async search(req: SearchRequest): Promise<SearchOutcome> {
-    const sources: MusicSource[] = req.sources && req.sources.length > 0 ? req.sources : ['wy', 'tx', 'kg', 'kw', 'mg']
+    const sources: MusicSource[] = req.sources && req.sources.length > 0 ? req.sources : DEFAULT_PLATFORM_PRIORITY
     return this.client.searchWithFallback(req.query, {
       sources,
       singer: req.singer,
@@ -53,6 +61,20 @@ export class LxProviderFacade implements Provider {
 
   async resolveUrl(music: MusicInfo, quality: Quality): Promise<MusicUrlResult> {
     return this.client.resolveUrl(music, quality)
+  }
+
+  async getLyric(music: MusicInfo): Promise<LyricFetch> {
+    const raw = await this.client.getLyric(music)
+    const payload: RawLyricPayload = {
+      lyric: raw.lyric ?? '',
+      ...(raw.tlyric ? { tlyric: raw.tlyric } : {}),
+      ...(raw.rlyric ? { rlyric: raw.rlyric } : {}),
+      ...(raw.lxlyric ? { lxlyric: raw.lxlyric } : {}),
+    }
+    if ((payload.lyric ?? '').trim() === '' && (payload.lxlyric ?? '').trim() === '') {
+      throw new Error('lxserver 未返回可用歌词')
+    }
+    return { payload, source: 'lxserver', format: payload.lxlyric ? 'lxlyric' : 'lrc' }
   }
 
   async listSources(): Promise<SourceEntry[]> {
@@ -105,6 +127,11 @@ export class MockSourceFacade implements Provider {
     return this.mock.resolveUrl(music, quality)
   }
 
+  async getLyric(music: MusicInfo): Promise<LyricFetch> {
+    const payload = await this.mock.getLyric(music)
+    return { payload, source: 'mock', format: payload.format ?? 'lrc' }
+  }
+
   async listSources(): Promise<SourceEntry[]> {
     return this.sources
   }
@@ -113,7 +140,7 @@ export class MockSourceFacade implements Provider {
     const hasInited = script.includes("lx.send('inited'") || script.includes('lx.send("inited"')
     if (!hasInited) return { valid: false, error: '脚本未调用 lx.send("inited", { sources: {...} })' }
     const name = extractName(script)
-    return { valid: true, metadata: { name }, sources: ['kw', 'wy', 'kg', 'tx', 'mg'], sourcesCount: 5 }
+    return { valid: true, metadata: { name }, sources: [...MUSIC_SOURCES], sourcesCount: MUSIC_SOURCES.length }
   }
 
   async uploadSource(filename: string, content: string): Promise<{ success: boolean; id?: string; error?: string }> {

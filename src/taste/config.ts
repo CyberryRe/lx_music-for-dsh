@@ -1,3 +1,11 @@
+// 画像配置（持久化在 `global.memory`）。
+//
+// 两个职责，别混：
+//   1. `memoryConfigSchema` —— **持久层读边界**的松散 schema（字段全可选）；
+//   2. `normalizeMemoryConfig()` —— 读侧归一化，把缺字段/越界的旧数据合并成确定值。
+//
+// ⚠️ 音乐画像是实验性功能，默认关闭；开启必须有用户显式确认（见 experimentalOptInAt）。
+
 import { z } from 'zod'
 
 /** 画像预算档位：控制 music_profile 返回的候选数与理由详细度（见设计文档 §10）。 */

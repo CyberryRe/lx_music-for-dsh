@@ -5,8 +5,40 @@
 /** LX Music 平台标识（lxserver / lx-music-desktop 通用）。 */
 export type MusicSource = 'kw' | 'wy' | 'kg' | 'tx' | 'mg' | 'local'
 
+/**
+ * 全部在线平台（不含 `local`），用于工具参数枚举、UI 平台下拉等"列出所有平台"的场景。
+ * 需要"按优先级依次尝试"时用 {@link DEFAULT_PLATFORM_PRIORITY}，两者顺序**刻意不同**。
+ */
+export const MUSIC_SOURCES: MusicSource[] = ['kw', 'wy', 'kg', 'tx', 'mg']
+
+/** 默认搜索优先级（`DEFAULT_SETTINGS.platformPriority` 的初值）。 */
+export const DEFAULT_PLATFORM_PRIORITY: MusicSource[] = ['wy', 'tx', 'kg', 'kw', 'mg']
+
+/**
+ * 平台显示名（UI 用）。
+ *
+ * 放在这里而不是各 UI 组件里：此前 MainWindow 与 SettingsWindow 各写了一份完全相同的表，
+ * 新增平台时很容易只改一处。
+ */
+export const SOURCE_LABEL: Record<MusicSource, string> = {
+  kw: '酷我',
+  wy: '网易云',
+  kg: '酷狗',
+  tx: 'QQ音乐',
+  mg: '咪咕',
+  local: '本地',
+}
+
+/** 取平台显示名；未知平台原样返回（第三方来源/音源脚本自定义标识不应显示成空白）。 */
+export function sourceLabel(source: string): string {
+  return (SOURCE_LABEL as Record<string, string>)[source] ?? source
+}
+
 /** 音质标识。 */
 export type Quality = '128k' | '320k' | 'flac' | 'flac24bit' | 'flac32bit' | 'wav'
+
+/** 全部音质（从低到高）：工具参数枚举与设置窗口下拉共用同一份，避免各处手写数组。 */
+export const QUALITIES: Quality[] = ['128k', '320k', 'flac', 'flac24bit', 'flac32bit', 'wav']
 
 /** 音质 + 大小，如 { type: '320k', size: '9.32M' }。 */
 export interface MusicQualityType {
@@ -53,6 +85,14 @@ export type PlaybackStatus = 'playing' | 'paused' | 'error' | 'stoped'
  * - shuffle：随机播放（自动/手动切歌时随机选曲）
  */
 export type PlayMode = 'list' | 'single' | 'order' | 'shuffle'
+
+/**
+ * 全部播放模式（值的全集，工具参数枚举用）。
+ *
+ * UI 的「点击循环切换」顺序是另一回事（列表循环 → 单曲循环 → 随机播放 → 顺序播放），
+ * 连图标与文案一起定义在 `src/ui/playModes.ts`；这里只管"有哪些值"。
+ */
+export const PLAY_MODE_VALUES: PlayMode[] = ['list', 'single', 'order', 'shuffle']
 
 /** 直链解析结果。 */
 export interface MusicUrlResult {
@@ -169,19 +209,12 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   lxServerUrl: '',
   defaultQuality: '320k',
   qualityFallbackChain: ['flac', '320k', '128k'],
-  platformPriority: ['wy', 'tx', 'kg', 'kw', 'mg'],
+  platformPriority: [...DEFAULT_PLATFORM_PRIORITY],
   perSourcePlatformPriority: {},
   autoPullHighestOnSwitch: true,
   fallbackStrategy: 'both',
   rateLimitPerMinute: 6,
   providerMode: 'auto',
-}
-
-/** Remote 调用返回值包装。 */
-export interface Answered<T> {
-  ok: boolean
-  value?: T
-  error?: { code: string; message: string; details?: Record<string, unknown> }
 }
 
 /** search_and_play 工具输入。 */
@@ -418,4 +451,94 @@ export interface TasteActionInput {
 export interface TasteActionResult {
   ok: boolean
   message: string
+}
+
+// ── 歌词（1.3.0）─────────────────────────────────────────────────────────────
+
+/**
+ * 歌词来源。
+ *
+ * 解析顺序（见 `src/engine/musicEngine.ts` 的 `resolveLyric`）：
+ * 1. `script`  —— 已启用的音源脚本实现的 `lyric` action（音源自带的歌词接口，最贴近播放的直链）
+ * 2. `sdk`     —— 内置 SDK 的五平台歌词接口
+ * 3. `lxserver`—— providerMode=lxserver 时的服务端歌词
+ * 4. `mock`    —— 演示数据源
+ * `none` = 都没拿到（此时 `LyricDoc.note` 里有原因）。
+ */
+export type LyricSource = 'script' | 'sdk' | 'lxserver' | 'mock' | 'none'
+
+/** 逐字时间轴片段（时间相对**行首**，毫秒）。 */
+export interface LyricWord {
+  /** 起始（相对行首，毫秒，已 clamp 到 ≥0）。 */
+  time: number
+  /** 时长（毫秒）；缺失/非法按 0 处理。 */
+  duration: number
+  text: string
+}
+
+/** 一行歌词（结构化后）。 */
+export interface LyricLine {
+  /** 绝对时间（秒，**已应用 [offset:]**）。 */
+  time: number
+  text: string
+  /** 翻译（tlyric）。 */
+  tr?: string
+  /** 音译（rlyric）。 */
+  ro?: string
+  /** 逐字时间轴（仅部分平台有：wy/kg/kw/mg 的逐字歌词）。 */
+  words?: LyricWord[]
+  /** 该行持续时间（秒）：到下一行的时间差；末行用兜底值。 */
+  duration: number
+}
+
+/** 解析后的歌词文档（host 解析，client 只渲染）。 */
+export interface LyricDoc {
+  source: LyricSource
+  /** 实际命中的平台（诊断/UI 角标用）；音源脚本命中的是歌曲自身的 platform。 */
+  platform?: MusicSource
+  /** 命中的原始格式：lrc / lxlyric / krc / mrc / script / none。 */
+  format: string
+  lines: LyricLine[]
+  /** `[offset:]`（毫秒，正数 = 歌词提前显示）。 */
+  offset: number
+  hasTranslation: boolean
+  hasWordTiming: boolean
+  /**
+   * 歌词只有纯文本、没有时间标签（已按估算间隔补出伪时间轴）。
+   * UI 可以据此提示"该平台未提供时间轴"。
+   */
+  plain: boolean
+  /** 歌词覆盖的时长（秒）；0 = 未知。 */
+  duration: number
+  /** 诊断信息（无歌词/降级原因；UI 在空状态下直接展示）。 */
+  note?: string
+}
+
+/** 歌词不可用时的空文档（UI 与工具都靠它拿到可展示的原因）。 */
+export function emptyLyricDoc(note: string, source: LyricSource = 'none', format = 'none'): LyricDoc {
+  return { source, format, lines: [], offset: 0, hasTranslation: false, hasWordTiming: false, plain: false, duration: 0, note }
+}
+
+// ── 系统媒体控件（SMTC / MediaSession）状态（1.3.0）──────────────────────────
+
+/**
+ * 插件推送给系统媒体面板的状态（client 侧自检用）。
+ *
+ * 系统面板（Windows SMTC / macOS Now Playing）**没有回读 API**，所以"到底推出去了什么"
+ * 只能在插件里自己记一份，再显示给用户 —— 否则"SMTC 还是显示会话名"这类问题无法自查。
+ */
+export interface SmtcStatus {
+  /** 当前内核是否有 `navigator.mediaSession`。 */
+  supported: boolean
+  /** 已推送的标题（未推送为空串）。 */
+  title: string
+  artist: string
+  /** 已推送的封面 URL（未推送为空串）。 */
+  artwork: string
+  /** 封面是否写进了 MediaMetadata。 */
+  artworkPushed: boolean
+  /** `playing` / `paused` / `none`。 */
+  playbackState: string
+  /** 降级或异常说明（不支持、setActionHandler 失败等）。 */
+  note?: string
 }

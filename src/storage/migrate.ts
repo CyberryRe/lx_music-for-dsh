@@ -1,24 +1,24 @@
+// 旧版（1.1.0 及更早）storage 布局 → 1.2.0 per-record 布局的一次性迁移。
+//
+// 1.2.0 把 domain 从 `single` 换成 `per-record`（写放大 + 坏记录韧性，见
+// docs/design-taste-memory.md §2/§13）。**不能依赖 JSON backend 的 "legacy bootstrap"**：
+//   1. 它只播种**表记录**、**不带 `global`**，而播放列表/当前索引/音质/音量/静音/播放模式/
+//      设置全在 global 里；
+//   2. 它把**旧文件的原始键直接当文件名**（`join(dir, table, `${key}.json`)`，不做转义），
+//      而 `logs` 表的键是 ISO 时间戳（`2026-09-11T03:47:40.052Z`）——**Windows 文件名不允许冒号**，
+//      于是 bootstrap 以 `ENOENT: rename '….tmp' -> '…2026-09-11T03:47:40.052Z.json'` 失败，
+//      整个 `open()` 抛错、插件静默退化成内存存储（1.2.0 在桌面版实测踩到）。
+//
+// 因此改成"自己读 → 把旧文件改名搁置 → 再打开"：旧文件不在原路径，bootstrap 就不会触发，
+// 迁移完全由本模块显式完成（键统一过 `storageKey()`）。键映射规则见 ./keys.ts。
+
 import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { StorageFace } from '../playback'
 import { storageKey } from './keys'
 
-/**
- * 旧版（1.1.0 及更早）storage domain 的落盘文件：`$DSH_HOME/storages/lx_music.json`。
- *
- * 1.2.0 把 domain 从 `single` 换成 `per-record`（写放大 + 坏记录韧性，见
- * docs/design-taste-memory.md §2/§13）。**不能依赖 JSON backend 的 "legacy bootstrap"**：
- *   1. 它只播种**表记录**、**不带 `global`**，而播放列表/当前索引/音质/音量/静音/播放模式/
- *      设置全在 global 里；
- *   2. 它把**旧文件的原始键直接当文件名**（`join(dir, table, `${key}.json`)`，不做转义），
- *      而 `logs` 表的键是 ISO 时间戳（`2026-09-11T03:47:40.052Z`）——**Windows 文件名不允许冒号**，
- *      于是 bootstrap 以 `ENOENT: rename '….tmp' -> '…2026-09-11T03:47:40.052Z.json'` 失败，
- *      整个 `open()` 抛错、插件静默退化成内存存储（1.2.0 在桌面版实测踩到）。
- *
- * 因此改成"自己读 → 把旧文件改名搁置 → 再打开"：旧文件不在原路径，bootstrap 就不会触发，
- * 迁移完全由本模块显式完成（键统一过 `storageKey()`）。
- */
+/** 旧版整份文件路径：`$DSH_HOME/storages/lx_music.json`。 */
 export function defaultDomainFile(source: NodeJS.ProcessEnv = process.env): string {
   const fromEnv = source.DSH_HOME
   const home = fromEnv && fromEnv.trim() ? fromEnv.trim() : join(homedir(), '.dsh')

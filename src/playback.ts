@@ -9,6 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Domain, DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import type {
   AddPosition,
+  LyricDoc,
   MusicInfo,
   MusicUrlResult,
   PlayLogEntry,
@@ -21,7 +22,8 @@ import type {
   SearchRequest,
   SourceEntry,
 } from './shared/types'
-import { DEFAULT_SETTINGS, intervalToSeconds } from './shared/types'
+import { DEFAULT_SETTINGS, emptyLyricDoc, intervalToSeconds } from './shared/types'
+import { parseLyric } from './shared/lrc'
 import { jsonSafe } from './shared/json'
 import { getSandboxRequestLog } from './engine/sandbox'
 import { createProvider, migrateMockMode, type Provider } from './provider'
@@ -73,6 +75,15 @@ const URL_CACHE_TTL_MS = 5 * 60_000
 
 /** 直链缓存条目上限（超出按最旧淘汰），避免长时间会话无界增长。 */
 const URL_CACHE_MAX = 200
+
+/**
+ * 歌词缓存有效期。与直链不同，歌词文本不会带签名过期；6 小时足够避免"每次打开歌词窗口
+ * 都打一遍各平台接口"，又不会让用户改过的歌词长期不刷新。
+ */
+const LYRIC_CACHE_TTL_MS = 6 * 60 * 60_000
+
+/** 歌词缓存条目上限（超出按最旧淘汰）。 */
+const LYRIC_CACHE_MAX = 100
 
 /** 从歌曲支持的音质中选择目标音质。 */
 export function pickQuality(music: MusicInfo, settings: PluginSettings, explicit?: Quality): Quality {
@@ -161,6 +172,8 @@ export class PlaybackService extends TypertRemoteService {
    * 仍然命中缓存（切歌不会重复打音源脚本）。
    */
   private urlCache = new Map<string, { value: MusicUrlResult; at: number }>()
+  /** 歌词缓存：`平台|歌曲id` → 已解析的文档（键不含音质——歌词与音质无关）。 */
+  private lyricCache = new Map<string, { doc: LyricDoc; at: number }>()
 
   constructor(ctx: Context, options: PlaybackServiceOptions = {}) {
     super(ctx, 'lxPlayback')
@@ -662,9 +675,53 @@ export class PlaybackService extends TypertRemoteService {
     throw err
   }
 
+  /**
+   * 歌词（解析后的结构化文档，带缓存）。
+   *
+   * 与 `resolveUrl` 的两点刻意差异：
+   *   1. **不抛错**：拿不到歌词时返回 `emptyLyricDoc(note)` —— "这首歌没有歌词"是正常结果，
+   *      不是异常。note 里带原始原因（平台报错/无音源脚本/接口超时），UI 直接展示即可。
+   *   2. **只缓存成功结果**：失败不进缓存，用户重开窗口（或下一轮）就会重试，
+   *      而不是被一次网络抖动钉死 6 小时。
+   */
+  @Remote('getLyric')
+  async getLyric(req: { music?: MusicInfo; id?: string }): Promise<LyricDoc> {
+    const explicit = req?.music ?? (req?.id ? this.state.playlist.find((m) => m.id === req.id) : undefined)
+    const music = explicit ?? this.state.current
+    if (!music) return emptyLyricDoc('没有正在播放的歌曲')
+
+    const cacheKey = `${music.source}|${music.id}`
+    const cached = this.lyricCache.get(cacheKey)
+    if (cached && this.now() - cached.at <= LYRIC_CACHE_TTL_MS) return jsonSafe(cached.doc)
+
+    try {
+      const fetch = await this.provider.getLyric(music)
+      const doc = parseLyric(fetch.payload, {
+        source: fetch.source,
+        platform: music.source,
+        format: fetch.format,
+        duration: intervalToSeconds(music.interval),
+      })
+      if (doc.lines.length > 0) {
+        this.lyricCache.set(cacheKey, { doc, at: this.now() })
+        while (this.lyricCache.size > LYRIC_CACHE_MAX) {
+          const oldest = this.lyricCache.keys().next()
+          if (oldest.done === true) break
+          this.lyricCache.delete(oldest.value)
+        }
+      } else {
+        console.warn(`[lx-music] 歌词内容为空（${music.name} - ${music.singer}）：${doc.note ?? '未知原因'}`)
+      }
+      return jsonSafe(doc)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[lx-music] 歌词获取失败（${music.name} - ${music.singer}）:`, message)
+      return emptyLyricDoc(message)
+    }
+  }
+
   /** 读直链缓存（过期即视为未命中并顺手丢弃）。 */
-  private readUrlCache(key: string): MusicUrlResult | undefined {
-    const hit = this.urlCache.get(key)
+  private readUrlCache(key: string): MusicUrlResult | undefined {    const hit = this.urlCache.get(key)
     if (!hit) return undefined
     if (this.now() - hit.at > URL_CACHE_TTL_MS) {
       this.urlCache.delete(key)
